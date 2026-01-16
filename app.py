@@ -54,7 +54,62 @@ OWNER_MAP = {
     23570355: 7,   # Thomas
 }
 
+# ---- Pipedrive custom field keys (hardcoded; no .env change needed) ----
+# Your language custom field key from Pipedrive
+PD_LANG_FIELD_KEY = "0a6493b05167a35971de14baa3b6e2b0175c11a7"
+
 app = FastAPI()
+
+
+# ---------------- Helpers: Pipedrive -> Odoo ----------------
+def map_lang_to_odoo(pd_lang_value):
+    """
+    Map Pipedrive language/custom value to Odoo lang codes.
+    Adjust mapping if your Pipedrive stores other values.
+    """
+    if pd_lang_value is None:
+        return None
+
+    v = str(pd_lang_value).strip()
+    if not v:
+        return None
+
+    vl = v.lower()
+
+    # Common human values
+    if vl in ("de", "deutsch", "german", "de_de", "de-de"):
+        return "de_DE"
+    if vl in ("en", "englisch", "english", "en_us", "en-us", "en_gb", "en-gb"):
+        # Pick one (must exist in your Odoo languages)
+        return "en_US"
+
+    # If Pipedrive already stores Odoo lang codes, pass through (e.g. de_DE)
+    if len(v) == 5 and v[2] == "_" and v[:2].isalpha() and v[3:].isalpha():
+        return v
+
+    return None
+
+
+def normalize_probability(pd_prob):
+    """
+    Odoo expects 0..100 for probability.
+    Pipedrive is usually 0..100 but some setups use 0..1.
+    """
+    if pd_prob is None:
+        return None
+    try:
+        prob = float(pd_prob)
+    except Exception:
+        return None
+
+    if 0.0 <= prob <= 1.0:
+        prob *= 100.0
+    # clamp (just in case)
+    if prob < 0:
+        prob = 0.0
+    if prob > 100:
+        prob = 100.0
+    return prob
 
 
 # ---------------- DB ----------------
@@ -149,8 +204,10 @@ def odoo_execute(uid: int, model: str, method: str, args=None, kwargs=None):
         "id": 1
     })
 
+
 def odoo_search(uid: int, model: str, domain, limit=1):
     return odoo_execute(uid, model, "search", args=[domain], kwargs={"limit": limit})
+
 
 def odoo_search_read(uid: int, model: str, domain, fields=None, limit=1):
     fields = fields or ["id"]
@@ -241,7 +298,18 @@ def upsert_org(uid: int, org_id: int) -> int:
     name = org.get("name") or f"Org {org_id}"
 
     mapped = mapping_get("org", org_id)
+
+    # Keep your working fields, only add website + lang if present
     vals = {"name": name, "is_company": True}
+
+    website = org.get("website")
+    if website:
+        vals["website"] = website
+
+    pd_lang = org.get(PD_LANG_FIELD_KEY)
+    odoo_lang = map_lang_to_odoo(pd_lang)
+    if odoo_lang:
+        vals["lang"] = odoo_lang
 
     if mapped:
         odoo_write(uid, "res.partner", mapped, vals)
@@ -274,7 +342,18 @@ def upsert_person(uid: int, person_id: int) -> int:
         phone = p["phone"][0].get("value")
 
     mapped = mapping_get("person", person_id)
+
+    # Keep working fields, add function + lang only
     vals = {"name": name, "parent_id": parent_id, "email": email, "phone": phone}
+
+    job_title = p.get("job_title")
+    if job_title:
+        vals["function"] = job_title
+
+    pd_lang = p.get(PD_LANG_FIELD_KEY)
+    odoo_lang = map_lang_to_odoo(pd_lang)
+    if odoo_lang:
+        vals["lang"] = odoo_lang
 
     if mapped:
         odoo_write(uid, "res.partner", mapped, vals)
@@ -344,6 +423,7 @@ def upsert_deal(uid: int, deal_id: int) -> int:
 
     mapped = mapping_get("deal", deal_id)
 
+    # Keep existing working fields; add probability + expected close date mapping
     vals = {
         "name": title,
         "type": "opportunity",
@@ -351,6 +431,17 @@ def upsert_deal(uid: int, deal_id: int) -> int:
         "expected_revenue": value,
         "team_id": odoo_team_id,
     }
+
+    # probability
+    prob = normalize_probability(d.get("probability"))
+    if prob is not None:
+        vals["probability"] = prob
+
+    # expected close date -> Odoo close deadline
+    expected_close = d.get("expected_close_date")
+    if expected_close:
+        # Odoo expects YYYY-MM-DD
+        vals["date_deadline"] = expected_close
 
     if odoo_user_id:
         vals["user_id"] = odoo_user_id
@@ -375,7 +466,6 @@ def upsert_deal(uid: int, deal_id: int) -> int:
     odoo_id = odoo_create(uid, "crm.lead", vals)
     mapping_set("deal", deal_id, odoo_id)
     return odoo_id
-
 
 
 # ---------------- WEBHOOK ----------------
@@ -433,4 +523,3 @@ def health_odoo():
         return {"ok": True, "uid": uid}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-    
