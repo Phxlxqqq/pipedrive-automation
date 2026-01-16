@@ -4,7 +4,7 @@ services:
     container_name: pipedrive-odoo-sync
     working_dir: /app
     env_file:
-      - .env
+      - /opt/pipedrive-odoo-sync/.env
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
