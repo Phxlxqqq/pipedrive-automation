@@ -153,6 +153,47 @@ def odoo_execute(uid: int, model: str, method: str, args=None, kwargs=None):
 def odoo_search(uid: int, model: str, domain, limit=1):
     return odoo_execute(uid, model, "search", args=[domain], kwargs={"limit": limit})
 
+def odoo_search_read(uid: int, model: str, domain, fields=None, limit=1):
+    fields = fields or ["id"]
+    return odoo_execute(
+        uid, model, "search_read",
+        args=[domain],
+        kwargs={"fields": fields, "limit": limit}
+    )
+
+
+def find_existing_deal_in_odoo(uid: int, title: str, partner_id: int | None, team_id: int | None):
+    """
+    Try to find an existing Odoo crm.lead that matches this Pipedrive deal,
+    even if we don't have a mapping yet.
+
+    Matching strategy:
+      1) exact name + partner (+ team if available)
+      2) exact name (+ team if available) only if unique (limit=2 check)
+    """
+    base_filters = [("type", "=", "opportunity"), ("active", "in", [True, False])]
+
+    # 1) name + partner (best)
+    if partner_id:
+        domain = base_filters + [("name", "=", title), ("partner_id", "=", partner_id)]
+        if team_id:
+            domain.append(("team_id", "=", team_id))
+
+        rows = odoo_search_read(uid, "crm.lead", domain, fields=["id"], limit=1)
+        if rows:
+            return rows[0]["id"]
+
+    # 2) name only, but only if it's unique (avoid overwriting wrong deal)
+    domain = base_filters + [("name", "=", title)]
+    if team_id:
+        domain.append(("team_id", "=", team_id))
+
+    rows = odoo_search_read(uid, "crm.lead", domain, fields=["id"], limit=2)
+    if len(rows) == 1:
+        return rows[0]["id"]
+
+    return None
+
 
 def odoo_create(uid: int, model: str, vals: dict):
     return odoo_execute(uid, model, "create", args=[vals])
@@ -318,13 +359,24 @@ def upsert_deal(uid: int, deal_id: int) -> int:
     if odoo_stage_id:
         vals["stage_id"] = odoo_stage_id
 
+    # 1) If we already mapped this Pipedrive deal -> update it
     if mapped:
         odoo_write(uid, "crm.lead", mapped, vals)
         return mapped
 
+    # 2) No mapping yet -> try to find an existing deal in Odoo (avoid duplicates)
+    existing = find_existing_deal_in_odoo(uid, title=title, partner_id=partner_id, team_id=odoo_team_id)
+    if existing:
+        odoo_write(uid, "crm.lead", existing, vals)
+        mapping_set("deal", deal_id, existing)
+        print(f"LINK deal {deal_id}: found existing Odoo crm.lead {existing}, updated + mapped")
+        return existing
+
+    # 3) Still nothing -> create new
     odoo_id = odoo_create(uid, "crm.lead", vals)
     mapping_set("deal", deal_id, odoo_id)
     return odoo_id
+
 
 
 # ---------------- WEBHOOK ----------------
