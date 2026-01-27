@@ -291,21 +291,37 @@ def surfe_enrich_person(first_name: str = None, last_name: str = None,
     return r.json()
 
 
-def surfe_search_people(domain: str, job_titles: list, limit: int = 10) -> list:
+def surfe_search_people(domain: str = None, company_name: str = None, job_titles: list = None, limit: int = 10) -> list:
     """
-    Synchronously search for people at a company by domain and job titles.
+    Synchronously search for people at a company by domain or company name and job titles.
     Returns list of people found.
+    
+    Args:
+        domain: Company domain (e.g. "example.com"). Either domain or company_name must be provided.
+        company_name: Company name (e.g. "Acme Corp"). Used when domain is not available.
+        job_titles: List of job titles to filter by
+        limit: Maximum number of results
     """
+    if not domain and not company_name:
+        raise ValueError("Either domain or company_name must be provided")
+    
     payload = {
-        "companies": {
-            "domains": [domain]
-        },
-        "people": {
-            "jobTitles": job_titles
-        },
+        "companies": {},
         "limit": limit,
         "peoplePerCompany": limit
     }
+    
+    # Use domain if available, otherwise use company name
+    if domain:
+        payload["companies"]["domains"] = [domain]
+    elif company_name:
+        payload["companies"]["names"] = [company_name]
+    
+    # Add job titles filter if provided
+    if job_titles:
+        payload["people"] = {
+            "jobTitles": job_titles
+        }
 
     r = requests.post(
         f"{SURFE_BASE}/people/search",
@@ -862,6 +878,7 @@ def handle_leadfeeder_stage(deal: dict, uid: int):
     Scenario 2: Deal created in Leadfeeder stage (68)
     - Organization known (from Leadfeeder), no person yet
     - Search for ICP person via Surfe and add to deal
+    - Works with domain OR company name (Leadfeeder doesn't provide domains)
     """
     deal_id = deal.get("id")
     org_id = pd_val(deal.get("org_id"))
@@ -877,29 +894,39 @@ def handle_leadfeeder_stage(deal: dict, uid: int):
         return
 
     org = pd_get(f"/organizations/{org_id}")
+    org_name = org.get("name")
+    
+    if not org_name:
+        print(f"LEADFEEDER: Org {org_id} has no name, skip")
+        return
 
-    # Extract domain from website field
+    # Try to extract domain from website field if available
     website = org.get("website")
     domain = extract_domain_from_website(website)
-
-    if not domain:
-        print(f"LEADFEEDER: Org {org_id} has no website/domain, skip")
-        return
+    
+    # Determine search method
+    if domain:
+        search_by = f"domain: {domain}"
+    else:
+        search_by = f"company name: {org_name}"
+    
+    print(f"LEADFEEDER: Searching for ICP person by {search_by}")
 
     # Get deal owner for new person
     pd_owner = deal.get("user_id")
     owner_id = pd_owner.get("id") if isinstance(pd_owner, dict) else pd_owner
 
-    # Surfe search for ICP persons
+    # Surfe search for ICP persons (use domain if available, otherwise company name)
     try:
         people = surfe_search_people(
             domain=domain,
+            company_name=org_name if not domain else None,
             job_titles=ICP_JOB_TITLES,
             limit=10
         )
 
         if not people:
-            print(f"LEADFEEDER: No people found at {domain}")
+            print(f"LEADFEEDER: No people found for {search_by}")
             return
 
         # Select best person by ICP priority
@@ -912,7 +939,7 @@ def handle_leadfeeder_stage(deal: dict, uid: int):
         full_name = f"{best_person.get('firstName', '')} {best_person.get('lastName', '')}".strip()
         job_title = best_person.get("jobTitle")
 
-        print(f"LEADFEEDER: Found best ICP person: {full_name} ({job_title}) at {domain}")
+        print(f"LEADFEEDER: Found best ICP person: {full_name} ({job_title}) for {search_by}")
 
         # Create person in Pipedrive
         new_person = pd_create_person(
@@ -937,7 +964,8 @@ def handle_leadfeeder_stage(deal: dict, uid: int):
                     first_name=best_person.get("firstName"),
                     last_name=best_person.get("lastName"),
                     linkedin_url=linkedin_url,
-                    company_domain=domain
+                    company_domain=domain,
+                    company_name=org_name if not domain else None
                 )
                 enrichment_id = result.get("enrichmentID")
                 if enrichment_id:
