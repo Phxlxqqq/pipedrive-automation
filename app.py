@@ -997,10 +997,14 @@ async def pipedrive_webhook(req: Request):
         deal_id = int(obj_id)
 
         # Surfe stage triggers on deal creation only
-        if action == "create":
+        # Pipedrive may send "create", "added", or similar actions for new deals
+        if action in ("create", "added"):
             try:
                 deal = pd_get(f"/deals/{deal_id}")
                 stage_id = deal.get("stage_id")
+                pipeline_id = deal.get("pipeline_id")
+
+                print(f"SURFE CHECK: Deal {deal_id} in stage {stage_id}, pipeline {pipeline_id}")
 
                 if stage_id == DOWNLOAD_STAGE_ID:
                     print(f"SURFE TRIGGER: Download stage {DOWNLOAD_STAGE_ID} detected for deal {deal_id}")
@@ -1008,6 +1012,8 @@ async def pipedrive_webhook(req: Request):
                 elif stage_id == LEADFEEDER_STAGE_ID:
                     print(f"SURFE TRIGGER: Leadfeeder stage {LEADFEEDER_STAGE_ID} detected for deal {deal_id}")
                     handle_leadfeeder_stage(deal, uid)
+                else:
+                    print(f"SURFE CHECK: Stage {stage_id} is not a Surfe trigger stage (37 or 68)")
             except Exception as e:
                 print(f"SURFE TRIGGER: Error handling stage trigger: {e}")
 
