@@ -344,23 +344,26 @@ def surfe_search_people(domain: str = None, company_name: str = None, job_titles
     if not domain and not company_name:
         raise ValueError("Either domain or company_name must be provided")
     
+    # FIX: Build companies object properly before adding to payload
+    companies_filter = {}
+    if domain:
+        companies_filter["domains"] = [domain]
+    elif company_name:
+        companies_filter["names"] = [company_name]
+    
     payload = {
-        "companies": {},
+        "companies": companies_filter,
         "limit": limit,
         "peoplePerCompany": limit
     }
-    
-    # Use domain if available, otherwise use company name
-    if domain:
-        payload["companies"]["domains"] = [domain]
-    elif company_name:
-        payload["companies"]["names"] = [company_name]
     
     # Add job titles filter if provided
     if job_titles:
         payload["people"] = {
             "jobTitles": job_titles
         }
+
+    print(f"SURFE SEARCH REQUEST: {payload}")
 
     r = requests.post(
         f"{SURFE_BASE}/people/search",
@@ -370,8 +373,12 @@ def surfe_search_people(domain: str = None, company_name: str = None, job_titles
     )
     if not r.ok:
         print(f"SURFE SEARCH ERROR: {r.status_code} - {r.text}")
+        print(f"SURFE SEARCH RESPONSE: {r.text}")
     r.raise_for_status()
     result = r.json()
+    
+    print(f"SURFE SEARCH RESPONSE: {result}")
+    
     return result.get("people", [])
 
 
