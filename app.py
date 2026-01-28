@@ -38,6 +38,16 @@ ICP_JOB_TITLES = [t.strip() for t in os.getenv(
     "CISO,Chief Information Security Officer,Compliance Manager,IT Manager,IT Director,CTO,Chief Technology Officer,CEO,Chief Executive Officer,Founder,Geschäftsführer"
 ).split(",")]
 
+# ---- Region-based TLDs for domain guessing ----
+# Priority order: most likely TLDs first for each region
+REGION_TLDS = {
+    "DACH": [".de", ".at", ".ch", ".com", ".eu"],
+    "UK": [".co.uk", ".uk", ".com", ".eu"],
+    "BENELUX": [".nl", ".be", ".lu", ".com", ".eu"],
+    "SV": [".se", ".com", ".eu"],  # Sweden
+    "DEFAULT": [".com", ".de", ".eu", ".io"],  # Fallback
+}
+
 # ---- Brave Search API (for company domain lookup) ----
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 
@@ -588,6 +598,20 @@ def pd_link_person_to_deal(deal_id: int, person_id: int) -> dict:
     return pd_put(f"/deals/{deal_id}", {"person_id": person_id})
 
 
+def pd_update_org(org_id: int, website: str = None) -> dict | None:
+    """Update an organization in Pipedrive (e.g., set website)."""
+    data = {}
+    if website:
+        # Ensure website has protocol for Pipedrive
+        if not website.startswith("http"):
+            website = f"https://{website}"
+        data["website"] = website
+
+    if data:
+        return pd_put(f"/organizations/{org_id}", data)
+    return None
+
+
 def pd_add_note_to_deal(deal_id: int, content: str) -> dict:
     """Add a note to a deal in Pipedrive."""
     return pd_post("/notes", {
@@ -825,10 +849,41 @@ def extract_domain_from_email(email: str) -> str | None:
     return email.split("@")[1].lower()
 
 
-def guess_company_domain(company_name: str) -> str | None:
+def extract_region_from_title(deal_title: str) -> str:
+    """
+    Extract region indicator from deal title.
+    Returns: "UK", "BENELUX", "SV", "DACH", or "DEFAULT"
+
+    Deal titles typically contain region prefix like "UK - Company Name" or "(BENELUX) Company".
+    """
+    if not deal_title:
+        return "DEFAULT"
+
+    title_upper = deal_title.upper()
+
+    # Check for region indicators (common patterns in deal titles)
+    if "UK" in title_upper or "UNITED KINGDOM" in title_upper or "BRITAIN" in title_upper:
+        return "UK"
+    if "BENELUX" in title_upper or "BELGIUM" in title_upper or "NETHERLANDS" in title_upper or "LUXEMBOURG" in title_upper:
+        return "BENELUX"
+    if "SV" in title_upper or "SWEDEN" in title_upper or "SWEDISH" in title_upper:
+        return "SV"
+    if "DACH" in title_upper or "GERMANY" in title_upper or "AUSTRIA" in title_upper or "SWITZERLAND" in title_upper:
+        return "DACH"
+
+    # Default to DACH if no region indicator found (most common)
+    return "DACH"
+
+
+def guess_company_domain(company_name: str, region: str = "DEFAULT") -> str | None:
     """
     Try to guess a company's domain from its name by testing common TLD patterns.
+    Uses region-specific TLDs for better accuracy.
     Returns the first working domain found, or None if none work.
+
+    Args:
+        company_name: The company name to guess domain for
+        region: Region code ("UK", "BENELUX", "SV", "DACH", or "DEFAULT")
     """
     import re
     import socket
@@ -839,10 +894,13 @@ def guess_company_domain(company_name: str) -> str | None:
     # Clean company name: "Leitner + Leitner GmbH" → "leitner-leitner"
     clean = company_name.lower().strip()
 
-    # Remove common legal suffixes
+    # Remove common legal suffixes (including region-specific ones)
     suffixes = [" gmbh", " ag", " kg", " ohg", " gbr", " se", " co. kg", " & co.",
                 " inc", " inc.", " ltd", " ltd.", " llc", " corp", " corporation",
-                " ug", " e.v.", " e.k."]
+                " ug", " e.v.", " e.k.",
+                " bv", " nv", " vof",  # Dutch/Belgian
+                " ab", " hb",  # Swedish
+                " plc", " limited"]  # UK
     for suffix in suffixes:
         clean = clean.replace(suffix, "")
 
@@ -861,8 +919,9 @@ def guess_company_domain(company_name: str) -> str | None:
     # Also try without hyphens (e.g., "leitnerleitner")
     clean_no_hyphen = clean.replace("-", "")
 
-    # TLDs to try, prioritized for DACH region
-    tlds = [".de", ".at", ".ch", ".com", ".eu", ".io"]
+    # Get region-specific TLDs (fallback to DEFAULT if region not found)
+    tlds = REGION_TLDS.get(region, REGION_TLDS["DEFAULT"])
+    print(f"DOMAIN GUESS: Using TLDs for region '{region}': {tlds}")
 
     # Domain variations to try
     variations = [clean]
@@ -1147,10 +1206,13 @@ def handle_leadfeeder_stage(deal: dict):
     - Organization known (from Leadfeeder), no person yet
     - Search for ICP person via Surfe and add to deal
     - Works with domain OR company name (Leadfeeder doesn't provide domains)
+    - Uses region from deal title (UK, BENELUX, SV, DACH) for better domain guessing
+    - Saves discovered domain to Pipedrive organization
     - Note: No Odoo sync - Pipeline 6 is Surfe-only
     - Person is only created AFTER enrichment completes (to ensure email is present)
     """
     deal_id = deal.get("id")
+    deal_title = deal.get("title", "")
     org_id = pd_val(deal.get("org_id"))
 
     if not org_id:
@@ -1172,16 +1234,22 @@ def handle_leadfeeder_stage(deal: dict):
         pd_add_note_to_deal(deal_id, "⚠️ Surfe: Organization has no name - contact search not possible.")
         return
 
+    # Extract region from deal title for region-specific TLD guessing
+    region = extract_region_from_title(deal_title)
+    print(f"LEADFEEDER: Detected region '{region}' from deal title '{deal_title}'")
+
     # Try to extract domain from website field if available
     website = org.get("website")
     domain = extract_domain_from_website(website)
+    domain_was_discovered = False  # Track if we found a new domain
 
     # If no domain from website, try to guess it from company name
     if not domain:
-        print(f"LEADFEEDER: No website found, trying to guess domain from company name '{org_name}'")
-        domain = guess_company_domain(org_name)
+        print(f"LEADFEEDER: No website found, trying to guess domain from company name '{org_name}' (region: {region})")
+        domain = guess_company_domain(org_name, region=region)
         if domain:
             print(f"LEADFEEDER: Guessed domain: {domain}")
+            domain_was_discovered = True
 
     # If guessing failed, try Brave Search API
     if not domain:
@@ -1189,6 +1257,15 @@ def handle_leadfeeder_stage(deal: dict):
         domain = search_company_domain(org_name)
         if domain:
             print(f"LEADFEEDER: Found domain via Brave Search: {domain}")
+            domain_was_discovered = True
+
+    # Save discovered domain to Pipedrive organization (if we found one and it wasn't already set)
+    if domain_was_discovered and domain:
+        try:
+            pd_update_org(org_id, website=domain)
+            print(f"LEADFEEDER: Saved discovered domain '{domain}' to organization {org_id}")
+        except Exception as e:
+            print(f"LEADFEEDER: Failed to save domain to organization: {e}")
 
     # Determine search method
     if domain:
