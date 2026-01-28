@@ -788,6 +788,13 @@ def extract_domain_from_website(website: str) -> str | None:
     return domain if domain else None
 
 
+def extract_domain_from_email(email: str) -> str | None:
+    """Extract domain from email address."""
+    if not email or "@" not in email:
+        return None
+    return email.split("@")[1].lower()
+
+
 def select_best_icp_person(people: list) -> dict | None:
     """
     Select the best person based on ICP priority.
@@ -872,6 +879,16 @@ def handle_download_stage(deal: dict):
             website = org.get("website")
         company_domain = extract_domain_from_website(website)
         company_name = org.get("name")
+
+    # Fallback: extract domain from email if no company domain available
+    if not company_domain and email:
+        company_domain = extract_domain_from_email(email)
+        print(f"DOWNLOAD: Using email domain as company domain: {company_domain}")
+
+    # Surfe requires at least company_domain or company_name for enrichment
+    if not company_domain and not company_name:
+        print(f"DOWNLOAD: No company info available for person {person_id}, skip enrichment")
+        return
 
     # Start Surfe enrichment
     try:
