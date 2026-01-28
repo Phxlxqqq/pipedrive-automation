@@ -38,6 +38,9 @@ ICP_JOB_TITLES = [t.strip() for t in os.getenv(
     "CISO,Chief Information Security Officer,Compliance Manager,IT Manager,IT Director,CTO,Chief Technology Officer,CEO,Chief Executive Officer,Founder,Geschäftsführer"
 ).split(",")]
 
+# ---- Brave Search API (for company domain lookup) ----
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
+
 # ---- Pipeline Allowlist + Odoo Team Mapping ----
 # Only deals in these Pipedrive pipelines will be synced to Odoo.
 # Value maps pipedrive pipeline_id -> odoo crm.team id (team_id).
@@ -887,6 +890,102 @@ def guess_company_domain(company_name: str) -> str | None:
     return None
 
 
+def search_company_domain(company_name: str) -> str | None:
+    """
+    Search for a company's domain using Brave Search API.
+    Returns the most likely company domain from search results.
+    """
+    if not BRAVE_API_KEY:
+        print("BRAVE SEARCH: No API key configured, skipping")
+        return None
+
+    if not company_name:
+        return None
+
+    # Search for company website
+    query = f"{company_name} official website"
+    print(f"BRAVE SEARCH: Searching for '{query}'")
+
+    try:
+        r = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={"X-Subscription-Token": BRAVE_API_KEY},
+            params={"q": query, "count": 5},
+            timeout=10
+        )
+        if not r.ok:
+            print(f"BRAVE SEARCH ERROR: {r.status_code} - {r.text}")
+            return None
+
+        results = r.json()
+        web_results = results.get("web", {}).get("results", [])
+
+        if not web_results:
+            print(f"BRAVE SEARCH: No results for '{company_name}'")
+            return None
+
+        # Clean company name for matching
+        company_clean = company_name.lower().strip()
+        for suffix in [" gmbh", " ag", " kg", " inc", " ltd", " llc"]:
+            company_clean = company_clean.replace(suffix, "")
+        company_words = set(company_clean.split())
+
+        # Look for a result that matches the company name
+        for result in web_results:
+            url = result.get("url", "")
+            title = (result.get("title") or "").lower()
+
+            # Extract domain from URL
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                domain = parsed.netloc.replace("www.", "")
+            except:
+                continue
+
+            if not domain:
+                continue
+
+            # Skip generic/social domains
+            skip_domains = ["linkedin.com", "facebook.com", "twitter.com", "xing.com",
+                           "wikipedia.org", "bloomberg.com", "crunchbase.com", "dnb.com",
+                           "google.com", "yelp.com", "glassdoor.com", "indeed.com"]
+            if any(skip in domain for skip in skip_domains):
+                continue
+
+            # Check if title or domain contains company name words
+            domain_words = set(domain.replace(".", " ").replace("-", " ").split())
+            title_words = set(title.split())
+
+            if company_words & domain_words or company_words & title_words:
+                print(f"BRAVE SEARCH: Found matching domain: {domain} (title: {result.get('title')})")
+                return domain
+
+        # Fallback: return first non-social result
+        for result in web_results:
+            url = result.get("url", "")
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                domain = parsed.netloc.replace("www.", "")
+            except:
+                continue
+
+            skip_domains = ["linkedin.com", "facebook.com", "twitter.com", "xing.com",
+                           "wikipedia.org", "bloomberg.com", "crunchbase.com", "dnb.com",
+                           "google.com", "yelp.com", "glassdoor.com", "indeed.com"]
+            if not any(skip in domain for skip in skip_domains):
+                print(f"BRAVE SEARCH: Using first result domain: {domain}")
+                return domain
+
+        print(f"BRAVE SEARCH: No suitable domain found for '{company_name}'")
+        return None
+
+    except Exception as e:
+        print(f"BRAVE SEARCH ERROR: {e}")
+        return None
+
+
 def company_name_matches(person: dict, target_company: str) -> bool:
     """
     Check if person's current company matches the target company.
@@ -1084,6 +1183,13 @@ def handle_leadfeeder_stage(deal: dict):
         if domain:
             print(f"LEADFEEDER: Guessed domain: {domain}")
 
+    # If guessing failed, try Brave Search API
+    if not domain:
+        print(f"LEADFEEDER: Domain guessing failed, trying Brave Search API")
+        domain = search_company_domain(org_name)
+        if domain:
+            print(f"LEADFEEDER: Found domain via Brave Search: {domain}")
+
     # Determine search method
     if domain:
         search_by = f"domain: {domain}"
@@ -1235,13 +1341,22 @@ async def pipedrive_webhook(req: Request):
             except Exception as e:
                 print(f"SURFE TRIGGER: Error handling stage trigger: {e}")
         else:
-            # For non-create actions, check pipeline to decide on Odoo sync
+            # For non-create actions (update, etc.), check pipeline and handle person assignment
             try:
                 deal = pd_get(f"/deals/{deal_id}")
                 pipeline_id = deal.get("pipeline_id")
                 if pipeline_id and int(pipeline_id) in SURFE_ONLY_PIPELINES:
                     skip_odoo_sync = True
                     print(f"SURFE ONLY: Pipeline {pipeline_id} - skipping Odoo sync for action {action}")
+
+                    # On update: if no person assigned yet, run Surfe automation to find one
+                    if action == "update":
+                        person_id = pd_val(deal.get("person_id"))
+                        if not person_id:
+                            print(f"SURFE UPDATE: No person on deal {deal_id}, running Surfe automation")
+                            handle_leadfeeder_stage(deal)
+                        else:
+                            print(f"SURFE UPDATE: Deal {deal_id} already has person {person_id}, skip automation")
             except Exception as e:
                 print(f"Pipeline check failed: {e}")
 
