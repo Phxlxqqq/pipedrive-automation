@@ -1202,10 +1202,10 @@ def handle_download_stage(deal: dict):
 
 def handle_leadfeeder_stage(deal: dict):
     """
-    Scenario 2: Deal created in Leadfeeder stage (68)
-    - Organization known (from Leadfeeder), no person yet
-    - Search for ICP person via Surfe and add to deal
-    - Works with domain OR company name (Leadfeeder doesn't provide domains)
+    Scenario 2: Deal created in Stage 68 (Person Search)
+    - Organization known, no person yet
+    - Search for ICP person via Surfe API and add to deal
+    - Works with domain OR company name
     - Uses region from deal title (UK, BENELUX, SV, DACH) for better domain guessing
     - Saves discovered domain to Pipedrive organization
     - Note: No Odoo sync - Pipeline 6 is Surfe-only
@@ -1216,27 +1216,27 @@ def handle_leadfeeder_stage(deal: dict):
     org_id = pd_val(deal.get("org_id"))
 
     if not org_id:
-        print(f"LEADFEEDER: Deal {deal_id} has no organization, skip")
+        print(f"SURFE SEARCH: Deal {deal_id} has no organization, skip")
         pd_add_note_to_deal(deal_id, "⚠️ Surfe: No organization in deal - contact search not possible.")
         return
 
     # If deal already has person, skip
     person_id = pd_val(deal.get("person_id"))
     if person_id:
-        print(f"LEADFEEDER: Deal {deal_id} already has person, skip")
+        print(f"SURFE SEARCH: Deal {deal_id} already has person, skip")
         return
 
     org = pd_get(f"/organizations/{org_id}")
     org_name = org.get("name")
 
     if not org_name:
-        print(f"LEADFEEDER: Org {org_id} has no name, skip")
+        print(f"SURFE SEARCH: Org {org_id} has no name, skip")
         pd_add_note_to_deal(deal_id, "⚠️ Surfe: Organization has no name - contact search not possible.")
         return
 
     # Extract region from deal title for region-specific TLD guessing
     region = extract_region_from_title(deal_title)
-    print(f"LEADFEEDER: Detected region '{region}' from deal title '{deal_title}'")
+    print(f"SURFE SEARCH: Detected region '{region}' from deal title '{deal_title}'")
 
     # Try to extract domain from website field if available
     website = org.get("website")
@@ -1245,27 +1245,27 @@ def handle_leadfeeder_stage(deal: dict):
 
     # If no domain from website, try to guess it from company name
     if not domain:
-        print(f"LEADFEEDER: No website found, trying to guess domain from company name '{org_name}' (region: {region})")
+        print(f"SURFE SEARCH: No website found, trying to guess domain from company name '{org_name}' (region: {region})")
         domain = guess_company_domain(org_name, region=region)
         if domain:
-            print(f"LEADFEEDER: Guessed domain: {domain}")
+            print(f"SURFE SEARCH: Guessed domain: {domain}")
             domain_was_discovered = True
 
     # If guessing failed, try Brave Search API
     if not domain:
-        print(f"LEADFEEDER: Domain guessing failed, trying Brave Search API")
+        print(f"SURFE SEARCH: Domain guessing failed, trying Brave Search API")
         domain = search_company_domain(org_name)
         if domain:
-            print(f"LEADFEEDER: Found domain via Brave Search: {domain}")
+            print(f"SURFE SEARCH: Found domain via Brave Search: {domain}")
             domain_was_discovered = True
 
     # Save discovered domain to Pipedrive organization (if we found one and it wasn't already set)
     if domain_was_discovered and domain:
         try:
             pd_update_org(org_id, website=domain)
-            print(f"LEADFEEDER: Saved discovered domain '{domain}' to organization {org_id}")
+            print(f"SURFE SEARCH: Saved discovered domain '{domain}' to organization {org_id}")
         except Exception as e:
-            print(f"LEADFEEDER: Failed to save domain to organization: {e}")
+            print(f"SURFE SEARCH: Failed to save domain to organization: {e}")
 
     # Determine search method
     if domain:
@@ -1273,7 +1273,7 @@ def handle_leadfeeder_stage(deal: dict):
     else:
         search_by = f"company name: {org_name}"
 
-    print(f"LEADFEEDER: Searching for ICP person by {search_by}")
+    print(f"SURFE SEARCH: Searching for ICP person by {search_by}")
 
     # Get deal owner for new person
     pd_owner = deal.get("user_id")
@@ -1289,7 +1289,7 @@ def handle_leadfeeder_stage(deal: dict):
         )
 
         if not people:
-            print(f"LEADFEEDER: No people found for {search_by}")
+            print(f"SURFE SEARCH: No people found for {search_by}")
             pd_add_note_to_deal(deal_id, f"⚠️ Surfe: No contacts found at '{org_name}' (search criteria: {', '.join(ICP_JOB_TITLES[:5])}...).")
             return
 
@@ -1297,7 +1297,7 @@ def handle_leadfeeder_stage(deal: dict):
         best_person = select_best_icp_person(people, target_company=org_name)
 
         if not best_person:
-            print(f"LEADFEEDER: No matching ICP person found at {org_name}")
+            print(f"SURFE SEARCH: No matching ICP person found at {org_name}")
             pd_add_note_to_deal(deal_id, f"⚠️ Surfe: Contacts found, but none work at '{org_name}'. Please check manually.")
             return
 
@@ -1305,7 +1305,7 @@ def handle_leadfeeder_stage(deal: dict):
         job_title = best_person.get("jobTitle")
         linkedin_url = best_person.get("linkedInUrl")
 
-        print(f"LEADFEEDER: Found best ICP person: {full_name} ({job_title}) for {search_by}")
+        print(f"SURFE SEARCH: Found best ICP person: {full_name} ({job_title}) for {search_by}")
 
         # DON'T create person yet - wait for enrichment to get email first
         # Store pending person data for creation when enrichment completes
@@ -1333,19 +1333,19 @@ def handle_leadfeeder_stage(deal: dict):
                 if enrichment_id:
                     # Save with pending person data - person will be created when enrichment completes
                     save_enrichment(enrichment_id, deal_id, None, "leadfeeder", pending_person_data)
-                    print(f"LEADFEEDER: Surfe enrichment started: {enrichment_id} - waiting for email before creating person")
+                    print(f"SURFE SEARCH: Surfe enrichment started: {enrichment_id} - waiting for email before creating person")
                 else:
-                    print(f"LEADFEEDER: No enrichment ID returned from Surfe")
+                    print(f"SURFE SEARCH: No enrichment ID returned from Surfe")
                     pd_add_note_to_deal(deal_id, f"⚠️ Surfe: Contact found ({full_name}, {job_title}), but enrichment failed.")
             except Exception as e:
-                print(f"LEADFEEDER: Surfe enrichment failed: {e}")
+                print(f"SURFE SEARCH: Surfe enrichment failed: {e}")
                 pd_add_note_to_deal(deal_id, f"⚠️ Surfe: Contact found ({full_name}, {job_title}), but enrichment failed: {e}")
         else:
-            print(f"LEADFEEDER: No identifiers for enrichment (no LinkedIn, domain, or company name)")
+            print(f"SURFE SEARCH: No identifiers for enrichment (no LinkedIn, domain, or company name)")
             pd_add_note_to_deal(deal_id, f"⚠️ Surfe: Contact found ({full_name}), but no data available for email enrichment.")
 
     except Exception as e:
-        print(f"LEADFEEDER: Error: {e}")
+        print(f"SURFE SEARCH: Error: {e}")
         pd_add_note_to_deal(deal_id, f"⚠️ Surfe: Error during contact search: {e}")
 
 
@@ -1411,7 +1411,7 @@ async def pipedrive_webhook(req: Request):
                     print(f"SURFE TRIGGER: Download stage {DOWNLOAD_STAGE_ID} detected for deal {deal_id}")
                     handle_download_stage(deal)
                 elif stage_id == LEADFEEDER_STAGE_ID:
-                    print(f"SURFE TRIGGER: Leadfeeder stage {LEADFEEDER_STAGE_ID} detected for deal {deal_id}")
+                    print(f"SURFE TRIGGER: Stage {LEADFEEDER_STAGE_ID} (Person Search) detected for deal {deal_id}")
                     handle_leadfeeder_stage(deal)
                 else:
                     print(f"SURFE CHECK: Stage {stage_id} is not a Surfe trigger stage (37 or 68)")
