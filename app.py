@@ -41,11 +41,14 @@ ICP_JOB_TITLES = [t.strip() for t in os.getenv(
 # ---- Pipeline Allowlist + Odoo Team Mapping ----
 # Only deals in these Pipedrive pipelines will be synced to Odoo.
 # Value maps pipedrive pipeline_id -> odoo crm.team id (team_id).
-# Note: Surfe triggers work independently of this map (based on stage_id only)
+# Note: Pipeline 6 is NOT synced to Odoo - it's only for Surfe triggers
 PIPELINE_MAP = {
     4: 1,   # Original pipeline -> Odoo Team 1
-    6: 1,   # Surfe/Leadfeeder pipeline -> Odoo Team 1 (adjust team_id if needed)
+    # Pipeline 6 is intentionally NOT included - Surfe-only, no Odoo sync
 }
+
+# Pipelines where Germany team filter is NOT applied (all owners allowed)
+SURFE_ONLY_PIPELINES = {6}
 
 # ---- Stage mapping ----
 # pipedrive stage_id -> odoo crm.stage id (stage_id)
@@ -622,6 +625,9 @@ def upsert_person(uid: int, person_id: int) -> int:
 
     org_id = pd_val(p.get("org_id"))
     parent_id = upsert_org(uid, int(org_id)) if org_id else None
+    # upsert_org returns -1 if org owner not in Germany team - treat as None for Odoo
+    if parent_id == -1:
+        parent_id = None
 
     email = None
     if isinstance(p.get("email"), list) and p["email"]:
@@ -695,8 +701,14 @@ def upsert_deal(uid: int, deal_id: int) -> int:
     partner_id = None
     if person_id:
         partner_id = upsert_person(uid, int(person_id))
+        # upsert_person returns -1 if person owner not in Germany team - treat as None for Odoo
+        if partner_id == -1:
+            partner_id = None
     elif org_id:
         partner_id = upsert_org(uid, int(org_id))
+        # upsert_org returns -1 if org owner not in Germany team - treat as None for Odoo
+        if partner_id == -1:
+            partner_id = None
 
     # ---- Value ----
     value = float(d.get("value") or 0.0)
@@ -803,11 +815,12 @@ def select_best_icp_person(people: list) -> dict | None:
     return people[0] if people else None
 
 
-def handle_download_stage(deal: dict, uid: int):
+def handle_download_stage(deal: dict):
     """
     Scenario 1: Deal created in Download stage (37)
     - Person has email but missing phone number
     - Start Surfe enrichment to get phone, name, company
+    - Note: No Odoo sync - Pipeline 6 is Surfe-only
     """
     deal_id = deal.get("id")
     person_id = pd_val(deal.get("person_id"))
@@ -873,12 +886,13 @@ def handle_download_stage(deal: dict, uid: int):
         print(f"DOWNLOAD: Surfe enrichment failed: {e}")
 
 
-def handle_leadfeeder_stage(deal: dict, uid: int):
+def handle_leadfeeder_stage(deal: dict):
     """
     Scenario 2: Deal created in Leadfeeder stage (68)
     - Organization known (from Leadfeeder), no person yet
     - Search for ICP person via Surfe and add to deal
     - Works with domain OR company name (Leadfeeder doesn't provide domains)
+    - Note: No Odoo sync - Pipeline 6 is Surfe-only
     """
     deal_id = deal.get("id")
     org_id = pd_val(deal.get("org_id"))
@@ -974,11 +988,7 @@ def handle_leadfeeder_stage(deal: dict, uid: int):
             except Exception as e:
                 print(f"LEADFEEDER: Surfe enrichment failed: {e}")
 
-        # Sync to Odoo
-        try:
-            upsert_person(uid, new_person_id)
-        except Exception as e:
-            print(f"LEADFEEDER: Odoo sync failed: {e}")
+        # Note: No Odoo sync here - Pipeline 6 is Surfe-only (no Odoo sync)
 
     except Exception as e:
         print(f"LEADFEEDER: Error: {e}")
@@ -1025,6 +1035,7 @@ async def pipedrive_webhook(req: Request):
         upsert_person(uid, int(obj_id))
     elif entity == "deal" or (event and event.startswith("deal.")):
         deal_id = int(obj_id)
+        skip_odoo_sync = False
 
         # Surfe stage triggers on deal creation only
         # Pipedrive may send "create", "added", or similar actions for new deals
@@ -1036,18 +1047,37 @@ async def pipedrive_webhook(req: Request):
 
                 print(f"SURFE CHECK: Deal {deal_id} in stage {stage_id}, pipeline {pipeline_id}")
 
+                # Check if this is a Surfe-only pipeline (no Odoo sync, no Germany filter)
+                if pipeline_id and int(pipeline_id) in SURFE_ONLY_PIPELINES:
+                    skip_odoo_sync = True
+                    print(f"SURFE ONLY: Pipeline {pipeline_id} - skipping Odoo sync")
+
                 if stage_id == DOWNLOAD_STAGE_ID:
                     print(f"SURFE TRIGGER: Download stage {DOWNLOAD_STAGE_ID} detected for deal {deal_id}")
-                    handle_download_stage(deal, uid)
+                    handle_download_stage(deal)
                 elif stage_id == LEADFEEDER_STAGE_ID:
                     print(f"SURFE TRIGGER: Leadfeeder stage {LEADFEEDER_STAGE_ID} detected for deal {deal_id}")
-                    handle_leadfeeder_stage(deal, uid)
+                    handle_leadfeeder_stage(deal)
                 else:
                     print(f"SURFE CHECK: Stage {stage_id} is not a Surfe trigger stage (37 or 68)")
             except Exception as e:
                 print(f"SURFE TRIGGER: Error handling stage trigger: {e}")
+        else:
+            # For non-create actions, check pipeline to decide on Odoo sync
+            try:
+                deal = pd_get(f"/deals/{deal_id}")
+                pipeline_id = deal.get("pipeline_id")
+                if pipeline_id and int(pipeline_id) in SURFE_ONLY_PIPELINES:
+                    skip_odoo_sync = True
+                    print(f"SURFE ONLY: Pipeline {pipeline_id} - skipping Odoo sync for action {action}")
+            except Exception as e:
+                print(f"Pipeline check failed: {e}")
 
-        upsert_deal(uid, deal_id)
+        # Only sync to Odoo if not a Surfe-only pipeline
+        if not skip_odoo_sync:
+            upsert_deal(uid, deal_id)
+        else:
+            print(f"SKIP ODOO: Deal {deal_id} is in Surfe-only pipeline")
     else:
         return {"ok": True, "ignored": True}
 
