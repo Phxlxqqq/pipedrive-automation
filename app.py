@@ -92,7 +92,30 @@ OWNER_MAP = {
 # Your language custom field key from Pipedrive
 PD_LANG_FIELD_KEY = "0a6493b05167a35971de14baa3b6e2b0175c11a7"
 
-app = FastAPI()
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Lifespan handler: runs on startup and shutdown."""
+    # Startup: Clear the events deduplication table
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute("DELETE FROM events")
+        con.commit()
+        deleted = con.total_changes
+        con.close()
+        print(f"STARTUP: Cleared {deleted} old events from deduplication table")
+    except Exception as e:
+        print(f"STARTUP: Could not clear events table: {e}")
+
+    yield  # App runs here
+
+    # Shutdown (if needed)
+    print("SHUTDOWN: App stopping")
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 # ---------------- Helpers: Pipedrive -> Odoo ----------------
@@ -1396,6 +1419,7 @@ async def pipedrive_webhook(req: Request):
     # Idempotency key: event + object id + timestamp
     event_key = f"{event}:{obj_id}:{meta.get('v') or meta.get('timestamp') or ''}"
     if event_seen(event_key):
+        print(f"WEBHOOK SKIP: Duplicate event {event_key} - already processed")
         return {"ok": True, "deduped": True}
 
     uid = odoo_login()
