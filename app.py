@@ -1329,23 +1329,9 @@ def handle_leadfeeder_stage(deal: dict):
                 limit=10
             )
 
-        # Fallback 2: If domain search returned nothing, try with company NAME instead
-        if not people and domain:
-            print(f"SURFE SEARCH: No people found by domain, trying by company name '{org_name}'...")
-            people = surfe_search_people(
-                domain=None,
-                company_name=org_name,
-                job_titles=ICP_JOB_TITLES,
-                limit=10
-            )
-            if not people:
-                # Try without job title filter
-                people = surfe_search_people(
-                    domain=None,
-                    company_name=org_name,
-                    job_titles=None,
-                    limit=10
-                )
+        # NOTE: Surfe's company name search is broken - it ignores the name filter and returns
+        # random people matching job titles (e.g., returns Google employees when searching "KUMAVISION AG").
+        # We only rely on domain search, which works correctly.
 
         if not people:
             print(f"SURFE SEARCH: No people found at all for {search_by} (also tried company name)")
@@ -1482,22 +1468,37 @@ async def pipedrive_webhook(req: Request):
             except Exception as e:
                 print(f"SURFE TRIGGER: Error handling stage trigger: {e}")
         else:
-            # For non-create actions (update, etc.), check pipeline and handle person assignment
+            # For non-create actions (update/change), check stage and handle accordingly
             try:
                 deal = pd_get(f"/deals/{deal_id}")
                 pipeline_id = deal.get("pipeline_id")
+                stage_id = deal.get("stage_id")
+
                 if pipeline_id and int(pipeline_id) in SURFE_ONLY_PIPELINES:
                     skip_odoo_sync = True
                     print(f"SURFE ONLY: Pipeline {pipeline_id} - skipping Odoo sync for action {action}")
 
-                    # On update: if no person assigned yet, run Surfe automation to find one
-                    if action == "update":
-                        person_id = pd_val(deal.get("person_id"))
+                # On update/change: check stage and run appropriate handler
+                # Pipedrive sends "change" for updates, not "update"
+                if action in ("update", "change"):
+                    person_id = pd_val(deal.get("person_id"))
+
+                    # Stage 68 (Person Search): If no person, search for one
+                    if stage_id == LEADFEEDER_STAGE_ID:
                         if not person_id:
-                            print(f"SURFE UPDATE: No person on deal {deal_id}, running Surfe automation")
+                            print(f"SURFE UPDATE: Stage 68 deal {deal_id} has no person, running person search")
                             handle_leadfeeder_stage(deal)
                         else:
-                            print(f"SURFE UPDATE: Deal {deal_id} already has person {person_id}, skip automation")
+                            print(f"SURFE UPDATE: Stage 68 deal {deal_id} already has person {person_id}, skip")
+
+                    # Stage 37 (Download): If person exists, enrich them
+                    elif stage_id == DOWNLOAD_STAGE_ID:
+                        if person_id:
+                            print(f"SURFE UPDATE: Stage 37 deal {deal_id} has person {person_id}, running enrichment")
+                            handle_download_stage(deal)
+                        else:
+                            print(f"SURFE UPDATE: Stage 37 deal {deal_id} has no person, skip (Download requires person)")
+
             except Exception as e:
                 print(f"Pipeline check failed: {e}")
 
