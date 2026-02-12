@@ -1,12 +1,13 @@
 """
 Surfe API functions and stage handlers.
 """
+import threading
 import requests
 
 from config import (
     SURFE_API_KEY, SURFE_BASE, SURFE_WEBHOOK_URL, ICP_JOB_TITLES
 )
-from db import save_enrichment, claim_surfe_deal
+from db import save_enrichment
 from helpers import (
     extract_domain_from_website, extract_domain_from_email,
     extract_region_from_title, guess_company_domain, search_company_domain,
@@ -15,6 +16,10 @@ from helpers import (
 from pipedrive import (
     pd_get, pd_val, pd_add_note_to_deal, pd_update_org
 )
+
+# In-memory deduplication - guaranteed race-condition-free
+_claimed_deals = set()
+_claimed_lock = threading.Lock()
 
 
 # ---- Surfe API ----
@@ -128,10 +133,13 @@ def handle_download_stage(deal: dict):
     """
     deal_id = deal.get("id")
 
-    # Atomic deduplication: claim this deal immediately
-    if not claim_surfe_deal(deal_id, "download"):
-        print(f"DOWNLOAD: Deal {deal_id} already claimed, skip")
-        return
+    # In-memory deduplication: atomic check-and-claim
+    with _claimed_lock:
+        key = (deal_id, "download")
+        if key in _claimed_deals:
+            print(f"DOWNLOAD: Deal {deal_id} already claimed, skip")
+            return
+        _claimed_deals.add(key)
 
     person_id = pd_val(deal.get("person_id"))
 
@@ -207,10 +215,13 @@ def handle_leadfeeder_stage(deal: dict):
     """
     deal_id = deal.get("id")
 
-    # Atomic deduplication: claim this deal immediately
-    if not claim_surfe_deal(deal_id, "leadfeeder"):
-        print(f"SURFE SEARCH: Deal {deal_id} already claimed, skip")
-        return
+    # In-memory deduplication: atomic check-and-claim
+    with _claimed_lock:
+        key = (deal_id, "leadfeeder")
+        if key in _claimed_deals:
+            print(f"SURFE SEARCH: Deal {deal_id} already claimed, skip")
+            return
+        _claimed_deals.add(key)
 
     deal_title = deal.get("title", "")
     org_id = pd_val(deal.get("org_id"))
