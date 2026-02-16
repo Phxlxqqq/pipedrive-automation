@@ -91,7 +91,6 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
         for item in table.get("Items", []):
             is_optional = item.get("Optional", False)
             is_selected = item.get("Selected", False)
-            # Parse price as Decimal from string to avoid float errors
             raw_price = str(item.get("UnitCost", "0"))
             item_price = Decimal(raw_price)
             item_qty = int(item.get("Quantity", 1))
@@ -100,9 +99,10 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
             item_discount = Decimal(raw_discount)
 
             if not is_optional or is_selected:
-                line_total = (item_price - item_discount) * item_qty
+                # Round each line total to avoid BP's division artifacts
+                # (BP divides totals by qty, causing e.g. 1328.57*7=9299.99 instead of 9300)
+                line_total = ((item_price - item_discount) * item_qty).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
                 table_total += line_total
-                print(f"BP RAW ITEM: '{item_name}' UnitCost={raw_price} Discount={raw_discount} Qty={item_qty} LineTotal={line_total} RunningTotal={table_total}")
                 table_items.append({
                     "name": item_name,
                     "price": float(item_price),
@@ -119,8 +119,8 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
                 })
 
         if table_items:
-            # Quantize to 2 decimal places (exact, no float drift)
-            final_price = float(table_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            # Table total is already rounded per line item, convert to float
+            final_price = float(table_total)
             included.append({
                 "name": table_title,
                 "price": final_price,
@@ -188,7 +188,7 @@ def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = N
     3. Replace deal products in Pipedrive
     4. Add note with history
     """
-    print(f"BP SYNC v2 (Decimal+NoTax): Starting sync for proposal {proposal_id} -> deal {deal_id} (event: {event_type})")
+    print(f"BP SYNC: Starting sync for proposal {proposal_id} -> deal {deal_id} (event: {event_type})")
 
     # 1. Fetch proposal
     proposal = bp_get_proposal(proposal_id)
@@ -203,8 +203,6 @@ def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = N
         return
 
     print(f"BP SYNC: Found {len(included)} products (+{len(excluded)} optional not selected)")
-    for p in included:
-        print(f"BP SYNC DEBUG: '{p['name']}' price={p['price']} tax={p['tax']}")
 
     # 3. Replace deal products
     products_for_pd = [
