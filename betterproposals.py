@@ -112,7 +112,7 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
         if table_items:
             included.append({
                 "name": table_title,
-                "price": table_total,
+                "price": round(table_total, 2),
                 "quantity": 1,
                 "currency": currency,
                 "tax": tax_pct,
