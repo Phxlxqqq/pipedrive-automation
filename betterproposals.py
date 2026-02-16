@@ -115,7 +115,8 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
                 })
 
         if table_items:
-            final_price = float(table_total)
+            # Round to nearest 0.50 (BP rounds to 50 cents)
+            final_price = float((table_total * 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP) / 2)
             included.append({
                 "name": table_title,
                 "price": final_price,
