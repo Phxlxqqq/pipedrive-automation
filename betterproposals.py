@@ -2,8 +2,11 @@
 Better Proposals API client.
 Fetches proposal data (products, prices, taxes) for syncing to Pipedrive.
 """
+import re
+import html
 import requests
 from config import BP_API_KEY, BP_BASE
+from pipedrive import pd_replace_deal_products, pd_add_note_to_deal
 
 
 def bp_headers():
@@ -42,7 +45,144 @@ def bp_get_signed_proposals() -> list:
     return result.get("data", [])
 
 
-# ---- TODO: Implement when API token is available ----
-# - Parse proposal line items (products, quantities, prices, tax)
-# - Map BP proposal to Pipedrive deal
-# - Create Pipedrive products from BP line items
+def _strip_html(text: str) -> str:
+    """Remove HTML tags and decode entities."""
+    if not text:
+        return ""
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]+>", "", text)
+    return text.strip()
+
+
+RECURRING_LABELS = {
+    "One Time Payment": "einmalig",
+    "Monthly Payment": "/Monat",
+    "Quarterly Payment": "/Quartal",
+    "Annual Payment": "/Jahr",
+}
+
+
+def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
+    """
+    Parse line items from BP proposal PriceTables.
+
+    Returns (included, excluded):
+      - included: mandatory items + selected optional items → will be added to deal
+      - excluded: unselected optional items → listed in note only
+    """
+    currency = proposal.get("CurrencyCode", "EUR")
+    tax_pct = float(proposal.get("TaxPercentage", 0))
+
+    included = []
+    excluded = []
+
+    for table in proposal.get("PriceTables", []):
+        table_title = table.get("Title", "")
+        for item in table.get("Items", []):
+            is_optional = item.get("Optional", False)
+            is_selected = item.get("Selected", False)
+
+            parsed = {
+                "name": _strip_html(item.get("Label", "")),
+                "price": float(item.get("UnitCost", 0)),
+                "quantity": int(item.get("Quantity", 1)),
+                "currency": currency,
+                "tax": tax_pct,
+                "discount": float(item.get("DiscountAmount", 0)),
+                "recurring_type": item.get("RecurringType", ""),
+                "optional": is_optional,
+                "selected": is_selected,
+                "table_title": table_title,
+                "description": _strip_html(item.get("Description", "")),
+            }
+
+            if not is_optional or is_selected:
+                included.append(parsed)
+            else:
+                excluded.append(parsed)
+
+    return included, excluded
+
+
+def _format_price(price: float, currency: str) -> str:
+    """Format price with currency symbol."""
+    if currency == "EUR":
+        return f"\u20ac{price:,.2f}"
+    return f"{price:,.2f} {currency}"
+
+
+def _build_note(event_type: str, included: list, excluded: list, currency: str) -> str:
+    """Build a deal note with product summary."""
+    event_labels = {
+        "sent": "gesendet",
+        "updated": "aktualisiert",
+        "signed": "signiert",
+    }
+    event_label = event_labels.get(event_type, event_type or "sync")
+
+    lines = [f"Better Proposals \u2014 Angebot {event_label}", ""]
+    lines.append("Produkte:")
+
+    total = 0
+    for p in included:
+        recurring = RECURRING_LABELS.get(p["recurring_type"], "")
+        price_str = _format_price(p["price"], currency)
+        opt_marker = " (optional, gewaehlt)" if p["optional"] else ""
+        lines.append(f"  {p['name']} \u2014 {p['quantity']}x {price_str}{recurring}{opt_marker}")
+        total += p["price"] * p["quantity"]
+
+    lines.append(f"\nGesamt (netto): {_format_price(total, currency)}")
+
+    if excluded:
+        lines.append("\nOptionale (nicht gewaehlt):")
+        for p in excluded:
+            recurring = RECURRING_LABELS.get(p["recurring_type"], "")
+            price_str = _format_price(p["price"], currency)
+            lines.append(f"  {p['name']} \u2014 {price_str}{recurring}")
+
+    return "\n".join(lines)
+
+
+def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = None):
+    """
+    Main sync function:
+    1. Fetch BP proposal
+    2. Parse line items
+    3. Replace deal products in Pipedrive
+    4. Add note with history
+    """
+    print(f"BP SYNC: Starting sync for proposal {proposal_id} -> deal {deal_id} (event: {event_type})")
+
+    # 1. Fetch proposal
+    proposal = bp_get_proposal(proposal_id)
+    currency = proposal.get("CurrencyCode", "EUR")
+
+    # 2. Parse line items
+    included, excluded = bp_parse_line_items(proposal)
+
+    if not included:
+        print(f"BP SYNC: No products found in proposal {proposal_id}")
+        pd_add_note_to_deal(deal_id, f"Better Proposals \u2014 Angebot {event_type}: Keine Produkte gefunden.")
+        return
+
+    print(f"BP SYNC: Found {len(included)} products (+{len(excluded)} optional not selected)")
+
+    # 3. Replace deal products
+    products_for_pd = [
+        {
+            "name": p["name"],
+            "price": p["price"],
+            "quantity": p["quantity"],
+            "currency": p["currency"],
+            "discount": p["discount"],
+            "tax": p["tax"],
+        }
+        for p in included
+    ]
+    pd_replace_deal_products(deal_id, products_for_pd)
+
+    # 4. Add note
+    note = _build_note(event_type, included, excluded, currency)
+    pd_add_note_to_deal(deal_id, note)
+
+    print(f"BP SYNC: Completed sync for proposal {proposal_id} -> deal {deal_id}")

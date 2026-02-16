@@ -349,7 +349,15 @@ async def betterproposals_webhook(req: Request):
 
     print(f"BP WEBHOOK: proposal_id={proposal_id}, deal_id={deal_id}, event_type={event_type}")
 
-    # TODO Phase 2: Call bp_sync_products_to_deal(proposal_id, deal_id, event_type)
+    if proposal_id and deal_id:
+        try:
+            from betterproposals import bp_sync_products_to_deal
+            bp_sync_products_to_deal(str(proposal_id), int(deal_id), event_type)
+        except Exception as e:
+            print(f"BP WEBHOOK ERROR: {e}")
+            return {"ok": False, "error": str(e)}
+    else:
+        print(f"BP WEBHOOK: Missing proposal_id or deal_id, skipping sync")
 
     return {"ok": True, "proposal_id": proposal_id, "deal_id": deal_id}
 
@@ -373,6 +381,17 @@ def test_bp_signed():
     try:
         data = bp_get_signed_proposals()
         return {"status": "ok", "data": data}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/test/bp/sync/{proposal_id}/{deal_id}")
+def test_bp_sync(proposal_id: str, deal_id: int):
+    """Temporary: Test full sync from BP proposal to Pipedrive deal."""
+    from betterproposals import bp_sync_products_to_deal
+    try:
+        bp_sync_products_to_deal(proposal_id, deal_id, "test")
+        return {"status": "ok", "synced": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
