@@ -4,6 +4,7 @@ Fetches proposal data (products, prices, taxes) for syncing to Pipedrive.
 """
 import re
 import html
+from decimal import Decimal, ROUND_HALF_UP
 import requests
 from config import BP_API_KEY, BP_BASE
 from pipedrive import pd_replace_deal_products, pd_add_note_to_deal
@@ -82,37 +83,45 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
         if not table_title:
             continue
 
-        table_total = 0
+        table_total = Decimal("0")
         table_items = []  # for note detail
         table_excluded = []
 
         for item in table.get("Items", []):
             is_optional = item.get("Optional", False)
             is_selected = item.get("Selected", False)
-            item_price = float(item.get("UnitCost", 0))
+            # Parse price as Decimal from string to avoid float errors
+            raw_price = str(item.get("UnitCost", "0"))
+            item_price = Decimal(raw_price)
             item_qty = int(item.get("Quantity", 1))
             item_name = _strip_html(item.get("Label", ""))
+            raw_discount = str(item.get("DiscountAmount", "0"))
+            item_discount = Decimal(raw_discount)
 
             if not is_optional or is_selected:
-                table_total += item_price * item_qty
+                line_total = (item_price - item_discount) * item_qty
+                table_total += line_total
                 table_items.append({
                     "name": item_name,
-                    "price": item_price,
+                    "price": float(item_price),
                     "quantity": item_qty,
+                    "discount": float(item_discount),
                     "optional": is_optional,
                     "recurring_type": item.get("RecurringType", ""),
                 })
             else:
                 table_excluded.append({
                     "name": item_name,
-                    "price": item_price,
+                    "price": float(item_price),
                     "recurring_type": item.get("RecurringType", ""),
                 })
 
         if table_items:
+            # Quantize to 2 decimal places (exact, no float drift)
+            final_price = float(table_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
             included.append({
                 "name": table_title,
-                "price": round(table_total, 2),
+                "price": final_price,
                 "quantity": 1,
                 "currency": currency,
                 "tax": tax_pct,
