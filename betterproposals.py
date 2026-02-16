@@ -91,35 +91,30 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
         for item in table.get("Items", []):
             is_optional = item.get("Optional", False)
             is_selected = item.get("Selected", False)
-            raw_price = str(item.get("UnitCost", "0"))
-            item_price = Decimal(raw_price)
-            item_qty = int(item.get("Quantity", 1))
             item_name = _strip_html(item.get("Label", ""))
-            raw_discount = str(item.get("DiscountAmount", "0"))
-            item_discount = Decimal(raw_discount)
+            item_qty = int(item.get("Quantity", 1))
+            item_price = Decimal(str(item.get("UnitCost", "0")))
+            # Use BP's pre-calculated Cost field (avoids UnitCost*Qty rounding errors)
+            line_cost = Decimal(str(item.get("Cost", "0")))
 
             if not is_optional or is_selected:
-                # Round each line total to avoid BP's division artifacts
-                # (BP divides totals by qty, causing e.g. 1328.57*7=9299.99 instead of 9300)
-                line_total = ((item_price - item_discount) * item_qty).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-                table_total += line_total
+                table_total += line_cost
                 table_items.append({
                     "name": item_name,
                     "price": float(item_price),
                     "quantity": item_qty,
-                    "discount": float(item_discount),
+                    "cost": float(line_cost),
                     "optional": is_optional,
                     "recurring_type": item.get("RecurringType", ""),
                 })
             else:
                 table_excluded.append({
                     "name": item_name,
-                    "price": float(item_price),
+                    "price": float(line_cost),
                     "recurring_type": item.get("RecurringType", ""),
                 })
 
         if table_items:
-            # Table total is already rounded per line item, convert to float
             final_price = float(table_total)
             included.append({
                 "name": table_title,
@@ -163,9 +158,9 @@ def _build_note(event_type: str, included: list, excluded: list, currency: str) 
         # List sub-items for detail
         for item in block.get("items", []):
             recurring = RECURRING_LABELS.get(item.get("recurring_type", ""), "")
-            item_price = _format_price(item["price"], currency)
+            cost_str = _format_price(item.get("cost", item["price"]), currency)
             opt_marker = " (optional)" if item.get("optional") else ""
-            lines.append(f"    {item['name']} \u2014 {item.get('quantity', 1)}x {item_price}{recurring}{opt_marker}")
+            lines.append(f"    {item['name']} \u2014 {cost_str}{recurring}{opt_marker}")
         lines.append("")
 
     lines.append(f"Gesamt (netto): {_format_price(total, currency)}")
