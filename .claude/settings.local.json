@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:developers.surfe.com)",
-      "WebFetch(domain:docs.surfe.com)"
+      "WebFetch(domain:docs.surfe.com)",
+      "WebFetch(domain:betterproposals.io)",
+      "WebFetch(domain:rollout.com)",
+      "WebFetch(domain:developers.pipedrive.com)"
     ]
   }
 }

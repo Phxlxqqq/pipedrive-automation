@@ -146,6 +146,120 @@ def pd_update_org(org_id: int, website: str = None) -> dict | None:
     return None
 
 
+# ---- Product Operations ----
+def pd_search_product(name: str) -> dict | None:
+    """Search for a product by name. Returns first exact match or None."""
+    r = requests.get(
+        f"{PIPEDRIVE_BASE}/products/search",
+        params={"api_token": PIPEDRIVE_TOKEN, "term": name, "exact_match": True},
+        timeout=30
+    )
+    r.raise_for_status()
+    js = r.json()
+    items = js.get("data", {}).get("items", [])
+    if items:
+        return items[0].get("item")
+    return None
+
+
+def pd_create_product(name: str, price: float, currency: str = "EUR") -> dict:
+    """Create a new product in Pipedrive."""
+    return pd_post("/products", {
+        "name": name,
+        "prices": [{"price": price, "currency": currency}]
+    })
+
+
+def pd_find_or_create_product(name: str, price: float, currency: str = "EUR") -> dict:
+    """Find existing product by name or create a new one."""
+    existing = pd_search_product(name)
+    if existing:
+        print(f"PD PRODUCT: Found existing product '{name}' (id={existing['id']})")
+        return existing
+    print(f"PD PRODUCT: Creating new product '{name}' (price={price} {currency})")
+    return pd_create_product(name, price, currency)
+
+
+def pd_get_deal_products(deal_id: int) -> list:
+    """Get all products attached to a deal."""
+    r = requests.get(
+        f"{PIPEDRIVE_BASE}/deals/{deal_id}/products",
+        params={"api_token": PIPEDRIVE_TOKEN},
+        timeout=30
+    )
+    r.raise_for_status()
+    js = r.json()
+    if not js.get("success"):
+        return []
+    return js.get("data", []) or []
+
+
+def pd_delete_deal_product(deal_id: int, deal_product_id: int):
+    """Remove a product from a deal."""
+    r = requests.delete(
+        f"{PIPEDRIVE_BASE}/deals/{deal_id}/products/{deal_product_id}",
+        params={"api_token": PIPEDRIVE_TOKEN},
+        timeout=30
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def pd_add_product_to_deal(deal_id: int, product_id: int, item_price: float,
+                           quantity: int = 1, discount: float = 0,
+                           tax: float = 0) -> dict:
+    """Add a product to a deal."""
+    data = {
+        "product_id": product_id,
+        "item_price": item_price,
+        "quantity": quantity,
+    }
+    if discount:
+        data["discount"] = discount
+        data["discount_type"] = "percentage"
+    if tax:
+        data["tax"] = tax
+    return pd_post(f"/deals/{deal_id}/products", data)
+
+
+def pd_replace_deal_products(deal_id: int, products: list[dict]) -> list:
+    """
+    Replace all products on a deal.
+    Deletes existing products, then adds new ones.
+
+    products: list of dicts with keys: name, price, quantity, currency, discount, tax
+    Returns list of added deal-product entries.
+    """
+    # Delete existing
+    existing = pd_get_deal_products(deal_id)
+    for p in existing:
+        dp_id = p.get("id")
+        if dp_id:
+            pd_delete_deal_product(deal_id, dp_id)
+            print(f"PD PRODUCT: Removed '{p.get('name')}' from deal {deal_id}")
+
+    # Add new
+    added = []
+    for p in products:
+        product = pd_find_or_create_product(
+            name=p["name"],
+            price=p.get("price", 0),
+            currency=p.get("currency", "EUR")
+        )
+        result = pd_add_product_to_deal(
+            deal_id=deal_id,
+            product_id=product["id"],
+            item_price=p.get("price", 0),
+            quantity=p.get("quantity", 1),
+            discount=p.get("discount", 0),
+            tax=p.get("tax", 0)
+        )
+        added.append(result)
+        print(f"PD PRODUCT: Added '{p['name']}' to deal {deal_id} ({p.get('quantity', 1)}x €{p.get('price', 0)})")
+
+    return added
+
+
 # ---- Notes ----
 def pd_add_note_to_deal(deal_id: int, content: str) -> dict:
     """Add a note to a deal in Pipedrive."""

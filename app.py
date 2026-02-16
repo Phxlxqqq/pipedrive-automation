@@ -336,14 +336,45 @@ async def betterproposals_webhook(req: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     payload = await req.json()
-    print(f"BP WEBHOOK: {json.dumps(payload, indent=2, default=str)}")
 
-    # TODO: Implement when API token is available
-    # - Parse proposal data (products, prices, taxes)
-    # - Create/update Pipedrive products
-    # - Link products to deal
+    # Log full payload for development (discover Zapier structure)
+    print(f"BP WEBHOOK: === FULL PAYLOAD ===")
+    print(json.dumps(payload, indent=2, default=str))
+    print(f"BP WEBHOOK: === TOP-LEVEL KEYS: {list(payload.keys())} ===")
 
-    return {"ok": True}
+    # Try to extract known fields (will refine after seeing real Zapier payload)
+    proposal_id = payload.get("proposal_id") or payload.get("id") or payload.get("proposalId")
+    deal_id = payload.get("deal_id") or payload.get("dealId") or payload.get("pipedrive_deal_id")
+    event_type = payload.get("event") or payload.get("event_type") or payload.get("type") or payload.get("status")
+
+    print(f"BP WEBHOOK: proposal_id={proposal_id}, deal_id={deal_id}, event_type={event_type}")
+
+    # TODO Phase 2: Call bp_sync_products_to_deal(proposal_id, deal_id, event_type)
+
+    return {"ok": True, "proposal_id": proposal_id, "deal_id": deal_id}
+
+
+# ---- Test Endpoints (temporary, for development) ----
+@app.get("/test/bp/{proposal_id}")
+def test_bp_proposal(proposal_id: str):
+    """Temporary: Fetch a BP proposal to inspect line item structure."""
+    from betterproposals import bp_get_proposal
+    try:
+        data = bp_get_proposal(proposal_id)
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.get("/test/bp")
+def test_bp_signed():
+    """Temporary: Fetch all signed BP proposals."""
+    from betterproposals import bp_get_signed_proposals
+    try:
+        data = bp_get_signed_proposals()
+        return {"status": "ok", "data": data}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
 # ---- Health Endpoints ----
