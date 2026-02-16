@@ -230,7 +230,9 @@ def pd_delete_deal_product(deal_id: int, deal_product_id: int):
 
 def pd_add_product_to_deal(deal_id: int, product_id: int, item_price: float,
                            quantity: int = 1, discount: float = 0,
-                           tax: float = 0) -> dict:
+                           discount_type: str = "percentage",
+                           tax: float = 0,
+                           billing_frequency: str = None) -> dict:
     """Add a product to a deal."""
     data = {
         "product_id": product_id,
@@ -239,9 +241,11 @@ def pd_add_product_to_deal(deal_id: int, product_id: int, item_price: float,
     }
     if discount:
         data["discount"] = discount
-        data["discount_type"] = "percentage"
+        data["discount_type"] = discount_type
     if tax:
         data["tax"] = tax
+    if billing_frequency:
+        data["billing_frequency"] = billing_frequency
     return pd_post(f"/deals/{deal_id}/products", data)
 
 
@@ -275,7 +279,9 @@ def pd_replace_deal_products(deal_id: int, products: list[dict]) -> list:
             item_price=p.get("price", 0),
             quantity=p.get("quantity", 1),
             discount=p.get("discount", 0),
-            tax=p.get("tax", 0)
+            discount_type=p.get("discount_type", "percentage"),
+            tax=p.get("tax", 0),
+            billing_frequency=p.get("billing_frequency"),
         )
         added.append(result)
         print(f"PD PRODUCT: Added '{p['name']}' to deal {deal_id} ({p.get('quantity', 1)}x €{p.get('price', 0)})")

@@ -4,6 +4,7 @@ Fetches proposal data (products, prices, taxes) for syncing to Pipedrive.
 """
 import re
 import html
+from collections import Counter
 from decimal import Decimal, ROUND_HALF_UP
 import requests
 from config import BP_API_KEY, BP_BASE
@@ -63,6 +64,24 @@ RECURRING_LABELS = {
 }
 
 
+BP_TO_PD_BILLING = {
+    "One Time Payment": "one-time",
+    "Monthly Payment": "monthly",
+    "Quarterly Payment": "quarterly",
+    "Annual Payment": "annually",
+}
+
+
+def _map_billing_frequency(recurring_types: list[str]) -> str | None:
+    """Determine billing frequency from list of RecurringTypes.
+    Uses most common type. Returns Pipedrive billing_frequency value."""
+    if not recurring_types:
+        return None
+    counts = Counter(recurring_types)
+    most_common = counts.most_common(1)[0][0]
+    return BP_TO_PD_BILLING.get(most_common)
+
+
 def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
     """
     Parse PriceTables from BP proposal.
@@ -73,8 +92,8 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
       - excluded: unselected optional items → listed in note only
     """
     currency = proposal.get("CurrencyCode", "EUR")
-    # Tax vorerst deaktiviert - erst Netto-Preise korrekt, dann Tax separat
-    tax_pct = 0
+    # 19% MwSt Deutschland (TODO: other countries later)
+    tax_pct = 19
 
     included = []
     excluded = []
@@ -84,9 +103,11 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
         if not table_title:
             continue
 
-        table_total = Decimal("0")
-        table_items = []  # for note detail
+        table_gross = Decimal("0")   # sum of UnitCost * Qty (before discount)
+        table_net = Decimal("0")     # sum of Cost (after discount)
+        table_items = []
         table_excluded = []
+        recurring_types = []
 
         for item in table.get("Items", []):
             is_optional = item.get("Optional", False)
@@ -96,9 +117,12 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
             item_price = Decimal(str(item.get("UnitCost", "0")))
             # Use BP's pre-calculated Cost field (avoids UnitCost*Qty rounding errors)
             line_cost = Decimal(str(item.get("Cost", "0")))
+            line_gross = item_price * item_qty
 
             if not is_optional or is_selected:
-                table_total += line_cost
+                table_gross += line_gross
+                table_net += line_cost
+                recurring_types.append(item.get("RecurringType", ""))
                 table_items.append({
                     "name": item_name,
                     "price": float(item_price),
@@ -116,15 +140,26 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
 
         if table_items:
             # Round to nearest 0.50 (BP rounds to 50 cents)
-            final_price = float((table_total * 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP) / 2)
+            def _round_50(val):
+                return (val * 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP) / 2
+
+            gross_rounded = float(_round_50(table_gross))
+            net_rounded = float(_round_50(table_net))
+            discount_amount = round(gross_rounded - net_rounded, 2)
+
+            # Determine billing frequency from most common RecurringType
+            billing_freq = _map_billing_frequency(recurring_types)
+
             included.append({
                 "name": table_title,
-                "price": final_price,
+                "price": gross_rounded,       # pre-discount price
                 "quantity": 1,
                 "currency": currency,
                 "tax": tax_pct,
-                "discount": 0,
-                "items": table_items,  # sub-items for note
+                "discount": discount_amount,   # discount as amount
+                "discount_type": "amount",
+                "billing_frequency": billing_freq,
+                "items": table_items,
             })
 
         excluded.extend(table_excluded)
@@ -150,11 +185,26 @@ def _build_note(event_type: str, included: list, excluded: list, currency: str) 
 
     lines = [f"Better Proposals \u2014 Angebot {event_label}", ""]
 
-    total = 0
+    total_gross = 0
+    total_discount = 0
     for block in included:
-        price_str = _format_price(block["price"], currency)
-        lines.append(f"{block['name']} \u2014 {price_str}")
-        total += block["price"]
+        discount = block.get("discount", 0)
+        net = block["price"] - discount
+        billing = block.get("billing_frequency", "")
+
+        price_str = _format_price(net, currency)
+        if discount:
+            gross_str = _format_price(block["price"], currency)
+            lines.append(f"{block['name']} \u2014 {gross_str} abzgl. {_format_price(discount, currency)} = {price_str}")
+        else:
+            lines.append(f"{block['name']} \u2014 {price_str}")
+
+        if billing and billing != "one-time":
+            billing_label = {"monthly": "/Monat", "quarterly": "/Quartal", "annually": "/Jahr"}.get(billing, "")
+            lines.append(f"    Abrechnung: {billing_label}")
+
+        total_gross += block["price"]
+        total_discount += discount
 
         # List sub-items for detail
         for item in block.get("items", []):
@@ -164,7 +214,11 @@ def _build_note(event_type: str, included: list, excluded: list, currency: str) 
             lines.append(f"    {item['name']} \u2014 {cost_str}{recurring}{opt_marker}")
         lines.append("")
 
-    lines.append(f"Gesamt (netto): {_format_price(total, currency)}")
+    total_net = total_gross - total_discount
+    if total_discount:
+        lines.append(f"Gesamt (brutto): {_format_price(total_gross, currency)}")
+        lines.append(f"Rabatt: -{_format_price(total_discount, currency)}")
+    lines.append(f"Gesamt (netto): {_format_price(total_net, currency)}")
 
     if excluded:
         lines.append("\nOptionale (nicht gewaehlt):")
@@ -208,7 +262,9 @@ def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = N
             "quantity": p["quantity"],
             "currency": p["currency"],
             "discount": p["discount"],
+            "discount_type": p.get("discount_type", "amount"),
             "tax": p["tax"],
+            "billing_frequency": p.get("billing_frequency"),
         }
         for p in included
     ]
