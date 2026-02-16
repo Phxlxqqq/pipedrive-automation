@@ -362,10 +362,17 @@ async def betterproposals_webhook(req: Request):
     return {"ok": True, "proposal_id": proposal_id, "deal_id": deal_id}
 
 
-# ---- Test Endpoints (temporary, for development) ----
+# ---- Test Endpoints (temporary, token-protected) ----
+def _check_test_token(req: Request):
+    """Verify token for test endpoints."""
+    if req.query_params.get("token") != BP_WEBHOOK_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @app.get("/test/bp/{proposal_id}")
-def test_bp_proposal(proposal_id: str):
+def test_bp_proposal(req: Request, proposal_id: str):
     """Temporary: Fetch a BP proposal to inspect line item structure."""
+    _check_test_token(req)
     from betterproposals import bp_get_proposal
     try:
         data = bp_get_proposal(proposal_id)
@@ -375,8 +382,9 @@ def test_bp_proposal(proposal_id: str):
 
 
 @app.get("/test/bp")
-def test_bp_signed():
+def test_bp_signed(req: Request):
     """Temporary: Fetch all signed BP proposals."""
+    _check_test_token(req)
     from betterproposals import bp_get_signed_proposals
     try:
         data = bp_get_signed_proposals()
@@ -386,8 +394,9 @@ def test_bp_signed():
 
 
 @app.get("/test/bp/sync/{proposal_id}/{deal_id}")
-def test_bp_sync(proposal_id: str, deal_id: int):
+def test_bp_sync(req: Request, proposal_id: str, deal_id: int):
     """Temporary: Test full sync from BP proposal to Pipedrive deal."""
+    _check_test_token(req)
     from betterproposals import bp_sync_products_to_deal
     try:
         bp_sync_products_to_deal(proposal_id, deal_id, "test")

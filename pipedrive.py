@@ -147,19 +147,30 @@ def pd_update_org(org_id: int, website: str = None) -> dict | None:
 
 
 # ---- Product Operations ----
-def pd_search_product(name: str) -> dict | None:
-    """Search for a product by name. Returns first exact match or None."""
+def pd_search_product(name: str, exact: bool = True) -> dict | None:
+    """Search for a product by name. Returns first match or None."""
     r = requests.get(
         f"{PIPEDRIVE_BASE}/products/search",
-        params={"api_token": PIPEDRIVE_TOKEN, "term": name, "exact_match": True},
+        params={"api_token": PIPEDRIVE_TOKEN, "term": name, "exact_match": exact},
         timeout=30
     )
     r.raise_for_status()
     js = r.json()
     items = js.get("data", {}).get("items", [])
-    if items:
+    if not items:
+        return None
+
+    if exact:
         return items[0].get("item")
-    return None
+
+    # Fuzzy: pick best match (case-insensitive name comparison)
+    name_lower = name.lower().strip()
+    for item in items:
+        product = item.get("item", {})
+        if product.get("name", "").lower().strip() == name_lower:
+            return product
+    # No exact case-insensitive match, return first result
+    return items[0].get("item")
 
 
 def pd_create_product(name: str, price: float, currency: str = "EUR") -> dict:
@@ -171,12 +182,24 @@ def pd_create_product(name: str, price: float, currency: str = "EUR") -> dict:
 
 
 def pd_find_or_create_product(name: str, price: float, currency: str = "EUR") -> dict:
-    """Find existing product by name or create a new one."""
-    existing = pd_search_product(name)
+    """
+    Find existing product by name or create a new one.
+    Strategy: exact match → fuzzy search → create new.
+    """
+    # 1. Try exact match
+    existing = pd_search_product(name, exact=True)
     if existing:
-        print(f"PD PRODUCT: Found existing product '{name}' (id={existing['id']})")
+        print(f"PD PRODUCT: Found exact match '{name}' (id={existing['id']})")
         return existing
-    print(f"PD PRODUCT: Creating new product '{name}' (price={price} {currency})")
+
+    # 2. Try fuzzy search (handles minor differences like case, whitespace)
+    fuzzy = pd_search_product(name, exact=False)
+    if fuzzy:
+        print(f"PD PRODUCT: Found fuzzy match '{fuzzy.get('name')}' for '{name}' (id={fuzzy['id']})")
+        return fuzzy
+
+    # 3. Create new
+    print(f"PD PRODUCT: No match found, creating '{name}' (price={price} {currency})")
     return pd_create_product(name, price, currency)
 
 
