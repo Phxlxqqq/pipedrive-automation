@@ -64,10 +64,11 @@ RECURRING_LABELS = {
 
 def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
     """
-    Parse line items from BP proposal PriceTables.
+    Parse PriceTables from BP proposal.
+    Each PriceTable block becomes ONE product (not individual line items).
 
     Returns (included, excluded):
-      - included: mandatory items + selected optional items → will be added to deal
+      - included: PriceTable blocks with summed prices → will be added to deal
       - excluded: unselected optional items → listed in note only
     """
     currency = proposal.get("CurrencyCode", "EUR")
@@ -77,29 +78,49 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
     excluded = []
 
     for table in proposal.get("PriceTables", []):
-        table_title = table.get("Title", "")
+        table_title = _strip_html(table.get("Title", ""))
+        if not table_title:
+            continue
+
+        table_total = 0
+        table_items = []  # for note detail
+        table_excluded = []
+
         for item in table.get("Items", []):
             is_optional = item.get("Optional", False)
             is_selected = item.get("Selected", False)
-
-            parsed = {
-                "name": _strip_html(item.get("Label", "")),
-                "price": float(item.get("UnitCost", 0)),
-                "quantity": int(item.get("Quantity", 1)),
-                "currency": currency,
-                "tax": tax_pct,
-                "discount": float(item.get("DiscountAmount", 0)),
-                "recurring_type": item.get("RecurringType", ""),
-                "optional": is_optional,
-                "selected": is_selected,
-                "table_title": table_title,
-                "description": _strip_html(item.get("Description", "")),
-            }
+            item_price = float(item.get("UnitCost", 0))
+            item_qty = int(item.get("Quantity", 1))
+            item_name = _strip_html(item.get("Label", ""))
 
             if not is_optional or is_selected:
-                included.append(parsed)
+                table_total += item_price * item_qty
+                table_items.append({
+                    "name": item_name,
+                    "price": item_price,
+                    "quantity": item_qty,
+                    "optional": is_optional,
+                    "recurring_type": item.get("RecurringType", ""),
+                })
             else:
-                excluded.append(parsed)
+                table_excluded.append({
+                    "name": item_name,
+                    "price": item_price,
+                    "recurring_type": item.get("RecurringType", ""),
+                })
+
+        if table_items:
+            included.append({
+                "name": table_title,
+                "price": table_total,
+                "quantity": 1,
+                "currency": currency,
+                "tax": tax_pct,
+                "discount": 0,
+                "items": table_items,  # sub-items for note
+            })
+
+        excluded.extend(table_excluded)
 
     return included, excluded
 
@@ -121,24 +142,29 @@ def _build_note(event_type: str, included: list, excluded: list, currency: str) 
     event_label = event_labels.get(event_type, event_type or "sync")
 
     lines = [f"Better Proposals \u2014 Angebot {event_label}", ""]
-    lines.append("Produkte:")
 
     total = 0
-    for p in included:
-        recurring = RECURRING_LABELS.get(p["recurring_type"], "")
-        price_str = _format_price(p["price"], currency)
-        opt_marker = " (optional, gewaehlt)" if p["optional"] else ""
-        lines.append(f"  {p['name']} \u2014 {p['quantity']}x {price_str}{recurring}{opt_marker}")
-        total += p["price"] * p["quantity"]
+    for block in included:
+        price_str = _format_price(block["price"], currency)
+        lines.append(f"{block['name']} \u2014 {price_str}")
+        total += block["price"]
 
-    lines.append(f"\nGesamt (netto): {_format_price(total, currency)}")
+        # List sub-items for detail
+        for item in block.get("items", []):
+            recurring = RECURRING_LABELS.get(item.get("recurring_type", ""), "")
+            item_price = _format_price(item["price"], currency)
+            opt_marker = " (optional)" if item.get("optional") else ""
+            lines.append(f"    {item['name']} \u2014 {item.get('quantity', 1)}x {item_price}{recurring}{opt_marker}")
+        lines.append("")
+
+    lines.append(f"Gesamt (netto): {_format_price(total, currency)}")
 
     if excluded:
         lines.append("\nOptionale (nicht gewaehlt):")
         for p in excluded:
-            recurring = RECURRING_LABELS.get(p["recurring_type"], "")
+            recurring = RECURRING_LABELS.get(p.get("recurring_type", ""), "")
             price_str = _format_price(p["price"], currency)
-            lines.append(f"  {p['name']} \u2014 {price_str}{recurring}")
+            lines.append(f"    {p['name']} \u2014 {price_str}{recurring}")
 
     return "\n".join(lines)
 
