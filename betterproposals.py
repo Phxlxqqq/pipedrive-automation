@@ -73,7 +73,8 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
       - excluded: unselected optional items → listed in note only
     """
     currency = proposal.get("CurrencyCode", "EUR")
-    tax_pct = float(proposal.get("TaxPercentage", 0))
+    # Tax vorerst deaktiviert - erst Netto-Preise korrekt, dann Tax separat
+    tax_pct = 0
 
     included = []
     excluded = []
@@ -186,7 +187,7 @@ def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = N
     3. Replace deal products in Pipedrive
     4. Add note with history
     """
-    print(f"BP SYNC: Starting sync for proposal {proposal_id} -> deal {deal_id} (event: {event_type})")
+    print(f"BP SYNC v2 (Decimal+NoTax): Starting sync for proposal {proposal_id} -> deal {deal_id} (event: {event_type})")
 
     # 1. Fetch proposal
     proposal = bp_get_proposal(proposal_id)
@@ -201,6 +202,8 @@ def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = N
         return
 
     print(f"BP SYNC: Found {len(included)} products (+{len(excluded)} optional not selected)")
+    for p in included:
+        print(f"BP SYNC DEBUG: '{p['name']}' price={p['price']} tax={p['tax']}")
 
     # 3. Replace deal products
     products_for_pd = [
