@@ -102,6 +102,7 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
             if not is_optional or is_selected:
                 line_total = (item_price - item_discount) * item_qty
                 table_total += line_total
+                print(f"BP RAW ITEM: '{item_name}' UnitCost={raw_price} Discount={raw_discount} Qty={item_qty} LineTotal={line_total} RunningTotal={table_total}")
                 table_items.append({
                     "name": item_name,
                     "price": float(item_price),
