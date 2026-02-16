@@ -57,10 +57,10 @@ def _strip_html(text: str) -> str:
 
 
 RECURRING_LABELS = {
-    "One Time Payment": "einmalig",
-    "Monthly Payment": "/Monat",
-    "Quarterly Payment": "/Quartal",
-    "Annual Payment": "/Jahr",
+    "One Time Payment": "one-time",
+    "Monthly Payment": "/month",
+    "Quarterly Payment": "/quarter",
+    "Annual Payment": "/year",
 }
 
 
@@ -103,11 +103,11 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
         if not table_title:
             continue
 
-        table_gross = Decimal("0")   # sum of UnitCost * Qty (before discount)
-        table_net = Decimal("0")     # sum of Cost (after discount)
+        table_net = Decimal("0")     # sum of Cost (post-discount)
         table_items = []
         table_excluded = []
         recurring_types = []
+        discount_pcts = []  # collect active discount percentages
 
         for item in table.get("Items", []):
             is_optional = item.get("Optional", False)
@@ -115,12 +115,15 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
             item_name = _strip_html(item.get("Label", ""))
             item_qty = int(item.get("Quantity", 1))
             item_price = Decimal(str(item.get("UnitCost", "0")))
-            # Use BP's pre-calculated Cost field (avoids UnitCost*Qty rounding errors)
+            # Cost = pre-calculated total (UnitCost is already discounted)
             line_cost = Decimal(str(item.get("Cost", "0")))
-            line_gross = item_price * item_qty
+
+            # Track discount percentage if active
+            has_discount = item.get("Discount", False)
+            if has_discount:
+                discount_pcts.append(float(item.get("DiscountAmount", 0)))
 
             if not is_optional or is_selected:
-                table_gross += line_gross
                 table_net += line_cost
                 recurring_types.append(item.get("RecurringType", ""))
                 table_items.append({
@@ -143,22 +146,32 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
             def _round_50(val):
                 return (val * 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP) / 2
 
-            gross_rounded = float(_round_50(table_gross))
             net_rounded = float(_round_50(table_net))
-            discount_amount = round(gross_rounded - net_rounded, 2)
+
+            # Calculate discount: if items have active discount, use percentage
+            # UnitCost is already discounted, so we reverse-calculate gross
+            if discount_pcts:
+                # Use the most common discount percentage for the table
+                discount_pct = max(set(discount_pcts), key=discount_pcts.count)
+                # Gross = Net / (1 - pct/100)
+                gross_price = round(net_rounded / (1 - discount_pct / 100), 2)
+            else:
+                discount_pct = 0
+                gross_price = net_rounded
 
             # Determine billing frequency from most common RecurringType
             billing_freq = _map_billing_frequency(recurring_types)
 
             included.append({
                 "name": table_title,
-                "price": gross_rounded,       # pre-discount price
+                "price": gross_price,          # pre-discount price
                 "quantity": 1,
                 "currency": currency,
                 "tax": tax_pct,
-                "discount": discount_amount,   # discount as amount
-                "discount_type": "amount",
+                "discount": discount_pct,       # discount as percentage
+                "discount_type": "percentage",
                 "billing_frequency": billing_freq,
+                "net_price": net_rounded,        # for note display
                 "items": table_items,
             })
 
@@ -176,35 +189,27 @@ def _format_price(price: float, currency: str) -> str:
 
 def _build_note(event_type: str, included: list, excluded: list, currency: str) -> str:
     """Build a deal note with product summary."""
-    event_labels = {
-        "sent": "gesendet",
-        "updated": "aktualisiert",
-        "signed": "signiert",
-    }
-    event_label = event_labels.get(event_type, event_type or "sync")
+    event_label = event_type or "sync"
 
-    lines = [f"Better Proposals \u2014 Angebot {event_label}", ""]
+    lines = [f"Better Proposals \u2014 Proposal {event_label}", ""]
 
-    total_gross = 0
-    total_discount = 0
+    total_net = 0
     for block in included:
-        discount = block.get("discount", 0)
-        net = block["price"] - discount
+        discount_pct = block.get("discount", 0)
+        net = block.get("net_price", block["price"])
         billing = block.get("billing_frequency", "")
 
-        price_str = _format_price(net, currency)
-        if discount:
-            gross_str = _format_price(block["price"], currency)
-            lines.append(f"{block['name']} \u2014 {gross_str} abzgl. {_format_price(discount, currency)} = {price_str}")
+        net_str = _format_price(net, currency)
+        if discount_pct:
+            lines.append(f"{block['name']} \u2014 {net_str} ({discount_pct:.0f}% discount)")
         else:
-            lines.append(f"{block['name']} \u2014 {price_str}")
+            lines.append(f"{block['name']} \u2014 {net_str}")
 
         if billing and billing != "one-time":
-            billing_label = {"monthly": "/Monat", "quarterly": "/Quartal", "annually": "/Jahr"}.get(billing, "")
-            lines.append(f"    Abrechnung: {billing_label}")
+            billing_label = {"monthly": "monthly", "quarterly": "quarterly", "annually": "annually"}.get(billing, "")
+            lines.append(f"    Billing: {billing_label}")
 
-        total_gross += block["price"]
-        total_discount += discount
+        total_net += net
 
         # List sub-items for detail
         for item in block.get("items", []):
@@ -214,14 +219,10 @@ def _build_note(event_type: str, included: list, excluded: list, currency: str) 
             lines.append(f"    {item['name']} \u2014 {cost_str}{recurring}{opt_marker}")
         lines.append("")
 
-    total_net = total_gross - total_discount
-    if total_discount:
-        lines.append(f"Gesamt (brutto): {_format_price(total_gross, currency)}")
-        lines.append(f"Rabatt: -{_format_price(total_discount, currency)}")
-    lines.append(f"Gesamt (netto): {_format_price(total_net, currency)}")
+    lines.append(f"Total (net): {_format_price(total_net, currency)}")
 
     if excluded:
-        lines.append("\nOptionale (nicht gewaehlt):")
+        lines.append("\nOptional (not selected):")
         for p in excluded:
             recurring = RECURRING_LABELS.get(p.get("recurring_type", ""), "")
             price_str = _format_price(p["price"], currency)
@@ -249,7 +250,7 @@ def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = N
 
     if not included:
         print(f"BP SYNC: No products found in proposal {proposal_id}")
-        pd_add_note_to_deal(deal_id, f"Better Proposals \u2014 Angebot {event_type}: Keine Produkte gefunden.")
+        pd_add_note_to_deal(deal_id, f"Better Proposals \u2014 Proposal {event_type}: No products found.")
         return
 
     print(f"BP SYNC: Found {len(included)} products (+{len(excluded)} optional not selected)")
