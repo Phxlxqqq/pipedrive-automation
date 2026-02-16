@@ -103,7 +103,7 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
         if not table_title:
             continue
 
-        table_net = Decimal("0")     # sum of Cost (post-discount)
+        table_gross = Decimal("0")   # sum of Cost (pre-discount gross)
         table_items = []
         table_excluded = []
         recurring_types = []
@@ -124,7 +124,7 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
                 discount_pcts.append(float(item.get("DiscountAmount", 0)))
 
             if not is_optional or is_selected:
-                table_net += line_cost
+                table_gross += line_cost
                 recurring_types.append(item.get("RecurringType", ""))
                 table_items.append({
                     "name": item_name,
@@ -146,32 +146,30 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
             def _round_50(val):
                 return (val * 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP) / 2
 
-            net_rounded = float(_round_50(table_net))
+            gross_rounded = float(_round_50(table_gross))
 
-            # Calculate discount: if items have active discount, use percentage
-            # UnitCost is already discounted, so we reverse-calculate gross
+            # Cost = pre-discount gross price
+            # Discount percentage is applied on top by Pipedrive
             if discount_pcts:
-                # Use the most common discount percentage for the table
                 discount_pct = max(set(discount_pcts), key=discount_pcts.count)
-                # Gross = Net / (1 - pct/100)
-                gross_price = round(net_rounded / (1 - discount_pct / 100), 2)
+                net_price = round(gross_rounded * (1 - discount_pct / 100), 2)
             else:
                 discount_pct = 0
-                gross_price = net_rounded
+                net_price = gross_rounded
 
             # Determine billing frequency from most common RecurringType
             billing_freq = _map_billing_frequency(recurring_types)
 
             included.append({
                 "name": table_title,
-                "price": gross_price,          # pre-discount price
+                "price": gross_rounded,         # pre-discount price (Cost sum)
                 "quantity": 1,
                 "currency": currency,
                 "tax": tax_pct,
                 "discount": discount_pct,       # discount as percentage
                 "discount_type": "percentage",
                 "billing_frequency": billing_freq,
-                "net_price": net_rounded,        # for note display
+                "net_price": net_price,          # for note display
                 "items": table_items,
             })
 
