@@ -20,19 +20,45 @@ def bp_headers():
 
 
 def bp_get_proposal(proposal_id: str) -> dict:
-    """Fetch full proposal details including line items."""
+    """Fetch full proposal details including line items.
+    Accepts either a ProposalID or a QuoteID (from BP URLs).
+    """
+    # Try direct proposal lookup first
     r = requests.get(
         f"{BP_BASE}/proposal/{proposal_id}",
         headers=bp_headers(),
         timeout=30
     )
-    if not r.ok:
-        print(f"BP ERROR: {r.status_code} - {r.text}")
-    r.raise_for_status()
-    result = r.json()
-    if result.get("status") == "error":
-        raise Exception(f"BP API error: {result}")
-    return result.get("data", {})
+    if r.ok:
+        result = r.json()
+        if result.get("status") != "error":
+            print(f"BP: Found proposal directly with ID {proposal_id}")
+            return result.get("data", {})
+
+    # ID not found as ProposalID — try as QuoteID
+    print(f"BP: ID {proposal_id} not found as ProposalID, searching as QuoteID...")
+    for endpoint in ["/proposal/sent", "/proposal/signed", "/proposal/draft"]:
+        try:
+            r2 = requests.get(f"{BP_BASE}{endpoint}", headers=bp_headers(), timeout=30)
+            if not r2.ok:
+                continue
+            proposals = r2.json().get("data", [])
+            for p in proposals:
+                if str(p.get("QuoteID")) == str(proposal_id):
+                    real_id = p.get("ID")
+                    print(f"BP: Found QuoteID {proposal_id} → ProposalID {real_id} (via {endpoint})")
+                    # Fetch full proposal data with the real ID
+                    r3 = requests.get(
+                        f"{BP_BASE}/proposal/{real_id}",
+                        headers=bp_headers(),
+                        timeout=30
+                    )
+                    r3.raise_for_status()
+                    return r3.json().get("data", {})
+        except Exception as e:
+            print(f"BP: Error searching {endpoint}: {e}")
+
+    raise Exception(f"BP: Proposal not found with ID or QuoteID {proposal_id}")
 
 
 def bp_get_signed_proposals() -> list:
