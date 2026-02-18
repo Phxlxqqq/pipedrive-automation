@@ -100,3 +100,11 @@ PD_LANG_FIELD_KEY = "0a6493b05167a35971de14baa3b6e2b0175c11a7"
 BP_API_KEY = os.getenv("BP_API_KEY")
 BP_BASE = "https://api.betterproposals.io"
 BP_WEBHOOK_TOKEN = os.getenv("BP_WEBHOOK_TOKEN")
+
+# Multiple BP API keys (one per user who sends proposals)
+# Format in .env: BP_API_KEYS=key1,key2,key3
+# Falls BP_API_KEYS not set, falls back to BP_API_KEY
+_bp_keys_raw = os.getenv("BP_API_KEYS", "")
+BP_API_KEYS = [k.strip() for k in _bp_keys_raw.split(",") if k.strip()]
+if not BP_API_KEYS and BP_API_KEY:
+    BP_API_KEYS = [BP_API_KEY]

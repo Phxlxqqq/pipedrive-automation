@@ -7,14 +7,14 @@ import html
 from collections import Counter
 from decimal import Decimal, ROUND_HALF_UP
 import requests
-from config import BP_API_KEY, BP_BASE
+from config import BP_API_KEY, BP_API_KEYS, BP_BASE
 from pipedrive import pd_replace_deal_products, pd_add_note_to_deal
 
 
-def bp_headers():
+def bp_headers(api_key: str = None):
     """Return authentication headers for Better Proposals API."""
     return {
-        "Bptoken": BP_API_KEY,
+        "Bptoken": api_key or BP_API_KEY,
         "Content-Type": "application/json"
     }
 
@@ -71,6 +71,46 @@ def bp_get_signed_proposals() -> list:
     r.raise_for_status()
     result = r.json()
     return result.get("data", [])
+
+
+def bp_find_proposal_by_preview_hash(preview_hash: str) -> str | None:
+    """Find a BP ProposalID by matching the Preview URL hash.
+
+    Searches /proposal/sent and /proposal/signed across ALL configured
+    BP API keys. Each key sees a different user's proposals.
+
+    Args:
+        preview_hash: The hash from the BP preview URL (ProposalID= parameter)
+
+    Returns:
+        The numeric ProposalID string, or None if not found.
+    """
+    target_fragment = f"ProposalID={preview_hash}"
+
+    for key_idx, api_key in enumerate(BP_API_KEYS):
+        for endpoint in ["/proposal/sent", "/proposal/signed"]:
+            try:
+                r = requests.get(
+                    f"{BP_BASE}{endpoint}",
+                    headers=bp_headers(api_key),
+                    timeout=30
+                )
+                if not r.ok:
+                    continue
+                proposals = r.json().get("data", [])
+                for p in proposals:
+                    preview_url = p.get("Preview", "")
+                    if target_fragment in preview_url:
+                        proposal_id = p.get("ID")
+                        print(f"BP HASH: Found proposal {proposal_id} "
+                              f"(key #{key_idx + 1}, {endpoint})")
+                        return proposal_id
+            except Exception as e:
+                print(f"BP HASH: Error searching {endpoint} with key #{key_idx + 1}: {e}")
+
+    print(f"BP HASH: No proposal found for hash {preview_hash[:20]}... "
+          f"(searched {len(BP_API_KEYS)} key(s))")
+    return None
 
 
 def _strip_html(text: str) -> str:

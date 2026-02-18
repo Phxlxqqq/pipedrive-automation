@@ -43,6 +43,13 @@ def get_con():
             PRIMARY KEY(deal_id, action_type)
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS bp_synced_deals (
+            deal_id INTEGER PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     return con
 
 
@@ -174,3 +181,25 @@ def clear_surfe_processed_deals():
     deleted = con.total_changes
     con.close()
     return deleted
+
+
+# ---- Better Proposals Deal Sync Deduplication ----
+def bp_deal_already_synced(deal_id: int) -> bool:
+    """Check if a deal already has BP products synced."""
+    con = get_con()
+    row = con.execute(
+        "SELECT 1 FROM bp_synced_deals WHERE deal_id = ?", (deal_id,)
+    ).fetchone()
+    con.close()
+    return row is not None
+
+
+def bp_mark_deal_synced(deal_id: int, proposal_id: str):
+    """Mark a deal as having BP products synced."""
+    con = get_con()
+    con.execute(
+        "INSERT OR REPLACE INTO bp_synced_deals(deal_id, proposal_id) VALUES(?, ?)",
+        (deal_id, proposal_id)
+    )
+    con.commit()
+    con.close()
