@@ -158,8 +158,7 @@ def bp_parse_line_items(proposal: dict) -> tuple[list[dict], list[dict]]:
       - excluded: unselected optional items → listed in note only
     """
     currency = proposal.get("CurrencyCode", "EUR")
-    # 19% MwSt Deutschland (TODO: other countries later)
-    tax_pct = 19
+    tax_pct = int(float(proposal.get("TaxAmount", 0)))
 
     included = []
     excluded = []
