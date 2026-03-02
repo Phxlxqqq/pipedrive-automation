@@ -175,10 +175,7 @@ def handle_download_stage(deal: dict):
     company_name = None
     if org_id:
         org = pd_get(f"/organizations/{org_id}")
-        website = org.get("address") or org.get("cc_email")
-        if not website:
-            website = org.get("website")
-        company_domain = extract_domain_from_website(website)
+        company_domain = extract_domain_from_website(org.get("website"))
         company_name = org.get("name")
 
     if not company_domain and email:

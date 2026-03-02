@@ -322,6 +322,10 @@ async def surfe_webhook(req: Request):
                 job_title=job_title
             )
             print(f"SURFE: Updated Pipedrive person {person_id}")
+            if phone:
+                pd_add_note_to_deal(deal_id, f"✅ Surfe: Telefonnummer gefunden: {phone}")
+            else:
+                pd_add_note_to_deal(deal_id, "⚠️ Surfe: Keine Telefonnummer gefunden.")
         except Exception as e:
             print(f"SURFE: Pipedrive update failed: {e}")
 
