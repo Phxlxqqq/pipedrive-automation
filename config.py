@@ -108,3 +108,12 @@ _bp_keys_raw = os.getenv("BP_API_KEYS", "")
 BP_API_KEYS = [k.strip() for k in _bp_keys_raw.split(",") if k.strip()]
 if not BP_API_KEYS and BP_API_KEY:
     BP_API_KEYS = [BP_API_KEY]
+
+# BP PriceTable title → Odoo product.template ID mapping (based on phase)
+# Phase 0/1 = Beratung Tage (91), Phase 2/3 = Prüfung Tage (131)
+BP_PHASE_PRODUCT_MAP = {
+    "phase 0": 91,
+    "phase 1": 91,
+    "phase 2": 131,
+    "phase 3": 131,
+}

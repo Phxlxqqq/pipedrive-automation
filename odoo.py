@@ -6,7 +6,7 @@ import requests
 from config import (
     ODOO_URL, ODOO_DB, ODOO_USER, ODOO_KEY,
     PIPELINE_MAP, STAGE_MAP, STATUS_STAGE_MAP, OWNER_MAP,
-    GERMANY_USER_IDS, PD_LANG_FIELD_KEY
+    GERMANY_USER_IDS, PD_LANG_FIELD_KEY, BP_PHASE_PRODUCT_MAP
 )
 from db import mapping_get, mapping_set
 from helpers import map_lang_to_odoo, normalize_probability
@@ -303,3 +303,99 @@ def upsert_deal(uid: int, deal_id: int) -> int:
     odoo_id = odoo_create(uid, "crm.lead", vals)
     mapping_set("deal", deal_id, odoo_id)
     return odoo_id
+
+
+# ---- Quotation (Sale Order) from BP Products ----
+def _get_odoo_product_tmpl_for_title(title: str) -> int | None:
+    """Map BP PriceTable title to Odoo product.template ID based on phase."""
+    title_lower = title.lower()
+    for phase_key, tmpl_id in BP_PHASE_PRODUCT_MAP.items():
+        if phase_key in title_lower:
+            return tmpl_id
+    return None
+
+
+def _find_product_variant_id(uid: int, template_id: int) -> int | None:
+    """Find the product.product (variant) ID for a given product.template ID."""
+    results = odoo_search(uid, "product.product", [("product_tmpl_id", "=", template_id)], limit=1)
+    return results[0] if results else None
+
+
+def upsert_deal_quotation(uid: int, pd_deal_id: int):
+    """
+    Create or update Odoo sale.order from Pipedrive deal products.
+    Called ~3 minutes after BP sync so products are already in Pipedrive.
+    """
+    from pipedrive import pd_get_deal_products
+
+    odoo_lead_id = mapping_get("deal", pd_deal_id)
+    if not odoo_lead_id:
+        print(f"ODOO QUOTE: No Odoo lead mapping for deal {pd_deal_id}, skip")
+        return
+
+    pd_products = pd_get_deal_products(pd_deal_id)
+    if not pd_products:
+        print(f"ODOO QUOTE: No products in deal {pd_deal_id}, skip")
+        return
+
+    # Get partner from the crm.lead
+    lead_data = odoo_search_read(uid, "crm.lead", [("id", "=", odoo_lead_id)],
+                                  fields=["partner_id"], limit=1)
+    if not lead_data or not lead_data[0].get("partner_id"):
+        print(f"ODOO QUOTE: No partner on lead {odoo_lead_id}, skip")
+        return
+    partner_id = lead_data[0]["partner_id"][0]
+
+    # Find or create sale.order for this opportunity
+    existing_orders = odoo_search_read(uid, "sale.order",
+                                        [("opportunity_id", "=", odoo_lead_id)],
+                                        fields=["id"], limit=1)
+    if existing_orders:
+        order_id = existing_orders[0]["id"]
+        # Remove existing lines
+        lines = odoo_execute(uid, "sale.order.line", "search",
+                              args=[[("order_id", "=", order_id)]])
+        if lines:
+            odoo_execute(uid, "sale.order.line", "unlink", args=[lines])
+        print(f"ODOO QUOTE: Updating existing order {order_id} for lead {odoo_lead_id}")
+    else:
+        order_id = odoo_create(uid, "sale.order", {
+            "partner_id": partner_id,
+            "opportunity_id": odoo_lead_id,
+            "state": "draft",
+        })
+        print(f"ODOO QUOTE: Created sale.order {order_id} for lead {odoo_lead_id}")
+
+    # Add order lines
+    variant_cache = {}
+    for p in pd_products:
+        name = p.get("name", "")
+        item_price = float(p.get("item_price", 0))
+        quantity = float(p.get("quantity", 1))
+        discount = float(p.get("discount", 0))
+        net_price = round(item_price * (1 - discount / 100), 2)
+
+        tmpl_id = _get_odoo_product_tmpl_for_title(name)
+        if not tmpl_id:
+            print(f"ODOO QUOTE: No phase match for '{name}', skipping")
+            continue
+
+        if tmpl_id not in variant_cache:
+            variant_cache[tmpl_id] = _find_product_variant_id(uid, tmpl_id)
+        variant_id = variant_cache[tmpl_id]
+
+        if not variant_id:
+            print(f"ODOO QUOTE: No variant found for template {tmpl_id}, skipping")
+            continue
+
+        odoo_execute(uid, "sale.order.line", "create", args=[{
+            "order_id": order_id,
+            "product_id": variant_id,
+            "name": name,
+            "price_unit": net_price,
+            "product_uom_qty": quantity,
+            "tax_id": [(5, 0, 0)],  # Clear taxes - price is already net
+        }])
+        print(f"ODOO QUOTE: Added '{name}' ({quantity}x €{net_price})")
+
+    print(f"ODOO QUOTE: Done - order {order_id} updated for deal {pd_deal_id}")

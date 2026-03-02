@@ -15,10 +15,10 @@ from config import (
     DOWNLOAD_STAGE_ID, LEADFEEDER_STAGE_ID, SURFE_ONLY_PIPELINES
 )
 from db import event_seen, get_enrichment, complete_enrichment
-from odoo import odoo_login, upsert_org, upsert_person, upsert_deal, archive_deal_in_odoo
+from odoo import odoo_login, upsert_org, upsert_person, upsert_deal, archive_deal_in_odoo, upsert_deal_quotation
 from pipedrive import (
     pd_get, pd_val, pd_create_person, pd_update_person,
-    pd_link_person_to_deal, pd_add_note_to_deal
+    pd_link_person_to_deal, pd_add_note_to_deal, pd_get_deal_products
 )
 from surfe import handle_download_stage, handle_leadfeeder_stage
 
@@ -143,6 +143,12 @@ async def pipedrive_webhook(req: Request):
 
         if not skip_odoo_sync:
             upsert_deal(uid, deal_id)
+            # Update Odoo quotation if deal already has products
+            try:
+                if pd_get_deal_products(deal_id):
+                    upsert_deal_quotation(uid, deal_id)
+            except Exception as e:
+                print(f"ODOO QUOTE UPDATE: Error for deal {deal_id}: {e}")
         else:
             print(f"SKIP ODOO: Deal {deal_id} is in Surfe-only pipeline")
     else:
@@ -332,6 +338,22 @@ async def surfe_webhook(req: Request):
     return {"ok": True}
 
 
+def _schedule_odoo_quotation(deal_id: int, delay: int = 180):
+    """Start a background timer to create Odoo quotation after delay (default 3 min)."""
+    def _run():
+        print(f"ODOO QUOTE: Starting delayed quotation sync for deal {deal_id}")
+        try:
+            uid = odoo_login()
+            upsert_deal_quotation(uid, deal_id)
+        except Exception as e:
+            print(f"ODOO QUOTE: Error for deal {deal_id}: {e}")
+
+    t = threading.Timer(delay, _run)
+    t.daemon = True
+    t.start()
+    print(f"ODOO QUOTE: Scheduled in {delay}s for deal {deal_id}")
+
+
 # ---- Better Proposals Webhook ----
 @app.post("/webhooks/betterproposals")
 async def betterproposals_webhook(req: Request):
@@ -357,6 +379,7 @@ async def betterproposals_webhook(req: Request):
         try:
             from betterproposals import bp_sync_products_to_deal
             bp_sync_products_to_deal(str(proposal_id), int(deal_id), event_type)
+            _schedule_odoo_quotation(int(deal_id))
         except Exception as e:
             print(f"BP WEBHOOK ERROR: {e}")
             return {"ok": False, "error": str(e)}
