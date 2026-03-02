@@ -317,7 +317,11 @@ def _get_odoo_product_tmpl_for_title(title: str) -> int | None:
 
 def _find_product_variant_id(uid: int, template_id: int) -> int | None:
     """Find the product.product (variant) ID for a given product.template ID."""
-    results = odoo_search(uid, "product.product", [("product_tmpl_id", "=", template_id)], limit=1)
+    # Include inactive products to handle archived/hidden catalog entries
+    results = odoo_execute(uid, "product.product", "search",
+                            args=[[("product_tmpl_id", "=", template_id),
+                                   ("active", "in", [True, False])]],
+                            kwargs={"limit": 1})
     return results[0] if results else None
 
 

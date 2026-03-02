@@ -116,4 +116,5 @@ BP_PHASE_PRODUCT_MAP = {
     "phase 1": 91,
     "phase 2": 131,
     "phase 3": 131,
+    "vorbereitung": 91,
 }
