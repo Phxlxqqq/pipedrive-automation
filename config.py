@@ -117,4 +117,7 @@ BP_PHASE_PRODUCT_MAP = {
     "phase 2": 131,
     "phase 3": 131,
     "vorbereitung": 91,
+    "drata": 133,
+    "vanta": 133,
+    "kertos": 133,
 }
