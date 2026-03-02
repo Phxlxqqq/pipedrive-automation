@@ -386,8 +386,8 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
 
         tmpl_id = _get_odoo_product_tmpl_for_title(name)
         if not tmpl_id:
-            print(f"ODOO QUOTE: No phase match for '{name}', skipping")
-            continue
+            print(f"ODOO QUOTE: No phase match for '{name}', using fallback 'Others' (127)")
+            tmpl_id = 127
 
         if tmpl_id not in variant_cache:
             variant_cache[tmpl_id] = _find_product_variant_id(uid, tmpl_id)
