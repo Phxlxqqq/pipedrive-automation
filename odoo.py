@@ -420,3 +420,21 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         print(f"ODOO QUOTE: Added '{name}' ({quantity}x €{net_price})")
 
     print(f"ODOO QUOTE: Done - order {order_id} updated for deal {pd_deal_id}")
+
+    # Update crm.lead expected_revenue (one-time) and recurring_revenue (annually)
+    one_time_total = sum(
+        round(float(p.get("item_price", 0)) * (1 - float(p.get("discount", 0)) / 100), 2) * float(p.get("quantity", 1))
+        for p in pd_products if p.get("billing_frequency") != "annually"
+    )
+    annual_total = sum(
+        round(float(p.get("item_price", 0)) * (1 - float(p.get("discount", 0)) / 100), 2) * float(p.get("quantity", 1))
+        for p in pd_products if p.get("billing_frequency") == "annually"
+    )
+    lead_vals = {"expected_revenue": round(one_time_total, 2)}
+    if annual_total:
+        lead_vals["recurring_revenue"] = round(annual_total, 2)
+    try:
+        odoo_write(uid, "crm.lead", odoo_lead_id, lead_vals)
+        print(f"ODOO QUOTE: Updated lead {odoo_lead_id} - one-time: {one_time_total:.2f}, recurring: {annual_total:.2f}")
+    except Exception as e:
+        print(f"ODOO QUOTE: Could not update lead revenue fields: {e}")
