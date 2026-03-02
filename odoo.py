@@ -346,6 +346,10 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         return
     partner_id = lead_data[0]["partner_id"][0]
 
+    # Get EUR currency ID
+    eur_ids = odoo_search(uid, "res.currency", [("name", "=", "EUR")], limit=1)
+    eur_currency_id = eur_ids[0] if eur_ids else None
+
     # Find or create sale.order for this opportunity
     existing_orders = odoo_search_read(uid, "sale.order",
                                         [("opportunity_id", "=", odoo_lead_id)],
@@ -357,13 +361,18 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
                               args=[[("order_id", "=", order_id)]])
         if lines:
             odoo_execute(uid, "sale.order.line", "unlink", args=[lines])
+        if eur_currency_id:
+            odoo_write(uid, "sale.order", order_id, {"currency_id": eur_currency_id})
         print(f"ODOO QUOTE: Updating existing order {order_id} for lead {odoo_lead_id}")
     else:
-        order_id = odoo_create(uid, "sale.order", {
+        order_vals = {
             "partner_id": partner_id,
             "opportunity_id": odoo_lead_id,
             "state": "draft",
-        })
+        }
+        if eur_currency_id:
+            order_vals["currency_id"] = eur_currency_id
+        order_id = odoo_create(uid, "sale.order", order_vals)
         print(f"ODOO QUOTE: Created sale.order {order_id} for lead {odoo_lead_id}")
 
     # Add order lines
