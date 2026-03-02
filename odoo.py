@@ -354,6 +354,13 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
     eur_ids = odoo_search(uid, "res.currency", [("name", "=", "EUR")], limit=1)
     eur_currency_id = eur_ids[0] if eur_ids else None
 
+    # Get 19% sales tax ID
+    tax_ids = odoo_execute(uid, "account.tax", "search",
+                            args=[[("amount", "=", 19), ("type_tax_use", "=", "sale"),
+                                   ("active", "in", [True, False])]],
+                            kwargs={"limit": 1})
+    tax_id = tax_ids[0] if tax_ids else None
+
     # Find or create sale.order for this opportunity
     existing_orders = odoo_search_read(uid, "sale.order",
                                         [("opportunity_id", "=", odoo_lead_id)],
@@ -401,14 +408,15 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
             print(f"ODOO QUOTE: No variant found for template {tmpl_id}, skipping")
             continue
 
-        odoo_execute(uid, "sale.order.line", "create", args=[{
+        line_vals = {
             "order_id": order_id,
             "product_id": variant_id,
             "name": name,
             "price_unit": net_price,
             "product_uom_qty": quantity,
-            "tax_id": [(5, 0, 0)],  # Clear taxes - price is already net
-        }])
+            "tax_id": [(6, 0, [tax_id])] if tax_id else [(5, 0, 0)],
+        }
+        odoo_execute(uid, "sale.order.line", "create", args=[line_vals])
         print(f"ODOO QUOTE: Added '{name}' ({quantity}x €{net_price})")
 
     print(f"ODOO QUOTE: Done - order {order_id} updated for deal {pd_deal_id}")
