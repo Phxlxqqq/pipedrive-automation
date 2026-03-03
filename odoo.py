@@ -273,6 +273,7 @@ def upsert_deal(uid: int, deal_id: int) -> int:
         "partner_id": partner_id,
         "expected_revenue": value,
         "team_id": odoo_team_id,
+        "active": status != "lost",  # reactivate archived lead if PD deal is open/won
     }
 
     prob = normalize_probability(d.get("probability"))
@@ -421,20 +422,13 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
 
     print(f"ODOO QUOTE: Done - order {order_id} updated for deal {pd_deal_id}")
 
-    # Update crm.lead expected_revenue (one-time) and recurring_revenue (annually)
-    one_time_total = sum(
+    # Update crm.lead expected_revenue (total net, all products)
+    total_revenue = sum(
         round(float(p.get("item_price", 0)) * (1 - float(p.get("discount", 0)) / 100), 2) * float(p.get("quantity", 1))
-        for p in pd_products if p.get("billing_frequency") != "annually"
+        for p in pd_products
     )
-    annual_total = sum(
-        round(float(p.get("item_price", 0)) * (1 - float(p.get("discount", 0)) / 100), 2) * float(p.get("quantity", 1))
-        for p in pd_products if p.get("billing_frequency") == "annually"
-    )
-    lead_vals = {"expected_revenue": round(one_time_total, 2)}
-    if annual_total:
-        lead_vals["recurring_revenue"] = round(annual_total, 2)
     try:
-        odoo_write(uid, "crm.lead", odoo_lead_id, lead_vals)
-        print(f"ODOO QUOTE: Updated lead {odoo_lead_id} - one-time: {one_time_total:.2f}, recurring: {annual_total:.2f}")
+        odoo_write(uid, "crm.lead", odoo_lead_id, {"expected_revenue": round(total_revenue, 2)})
+        print(f"ODOO QUOTE: Updated lead {odoo_lead_id} - expected_revenue: {total_revenue:.2f}")
     except Exception as e:
         print(f"ODOO QUOTE: Could not update lead revenue fields: {e}")
