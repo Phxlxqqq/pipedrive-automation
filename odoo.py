@@ -343,8 +343,9 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         print(f"ODOO QUOTE: No products in deal {pd_deal_id}, skip")
         return
 
-    # Get partner from the crm.lead
-    lead_data = odoo_search_read(uid, "crm.lead", [("id", "=", odoo_lead_id)],
+    # Get partner from the crm.lead (include archived leads)
+    lead_data = odoo_search_read(uid, "crm.lead",
+                                  [("id", "=", odoo_lead_id), ("active", "in", [True, False])],
                                   fields=["partner_id"], limit=1)
     if not lead_data or not lead_data[0].get("partner_id"):
         print(f"ODOO QUOTE: No partner on lead {odoo_lead_id}, skip")
