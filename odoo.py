@@ -363,9 +363,10 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
                             kwargs={"limit": 1})
     tax_id = tax_ids[0] if tax_ids else None
 
-    # Find or create sale.order for this opportunity
+    # Find or create sale.order for this opportunity (skip cancelled orders)
     existing_orders = odoo_search_read(uid, "sale.order",
-                                        [("opportunity_id", "=", odoo_lead_id)],
+                                        [("opportunity_id", "=", odoo_lead_id),
+                                         ("state", "!=", "cancel")],
                                         fields=["id"], limit=1)
     if existing_orders:
         order_id = existing_orders[0]["id"]
