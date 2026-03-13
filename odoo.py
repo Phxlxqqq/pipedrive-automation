@@ -354,6 +354,12 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         return
     partner_id = lead_data[0]["partner_id"][0]
 
+    # Use company (parent) as partner for sale.order, not the individual contact
+    partner_data = odoo_search_read(uid, "res.partner", [("id", "=", partner_id)],
+                                     fields=["parent_id", "is_company"], limit=1)
+    if partner_data and not partner_data[0].get("is_company") and partner_data[0].get("parent_id"):
+        partner_id = partner_data[0]["parent_id"][0]
+
     # Get EUR currency ID
     eur_ids = odoo_search(uid, "res.currency", [("name", "=", "EUR")], limit=1)
     eur_currency_id = eur_ids[0] if eur_ids else None
