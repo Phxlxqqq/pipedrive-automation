@@ -189,7 +189,7 @@ def upsert_person(uid: int, person_id: int) -> int:
 
     mapped = mapping_get("person", person_id)
 
-    vals = {"name": name, "parent_id": parent_id, "email": email, "phone": phone}
+    vals = {"name": name, "parent_id": parent_id, "email": email, "phone": phone, "is_company": False}
 
     job_title = p.get("job_title")
     if job_title:
@@ -205,7 +205,7 @@ def upsert_person(uid: int, person_id: int) -> int:
         return mapped
 
     if email:
-        found = odoo_search(uid, "res.partner", [("email", "=", email)], limit=1)
+        found = odoo_search(uid, "res.partner", [("email", "=", email), ("is_company", "=", False)], limit=1)
         if found:
             odoo_id = found[0]
             odoo_write(uid, "res.partner", odoo_id, vals)
