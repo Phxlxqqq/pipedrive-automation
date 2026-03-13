@@ -202,6 +202,7 @@ def upsert_person(uid: int, person_id: int) -> int:
 
     if mapped:
         odoo_write(uid, "res.partner", mapped, vals)
+        odoo_write(uid, "res.partner", mapped, {"is_company": False})
         return mapped
 
     if email:
@@ -213,6 +214,7 @@ def upsert_person(uid: int, person_id: int) -> int:
             return odoo_id
 
     odoo_id = odoo_create(uid, "res.partner", vals)
+    odoo_write(uid, "res.partner", odoo_id, {"is_company": False})
     mapping_set("person", person_id, odoo_id)
     return odoo_id
 
