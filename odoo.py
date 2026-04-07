@@ -171,9 +171,16 @@ def upsert_org(uid: int, org_id: int) -> int:
     # Address fields from Pipedrive
     route = org.get("address_route") or ""
     street_number = org.get("address_street_number") or ""
+    # If street number missing, try to extract from formatted address string
+    # Pipedrive sometimes puts it as first token: "20, Bildstockstraße, ..."
+    if route and not street_number:
+        addr_raw = org.get("address") or ""
+        first_part = addr_raw.split(",")[0].strip()
+        if first_part and first_part.replace(" ", "").isdigit():
+            street_number = first_part
     street = f"{route} {street_number}".strip() if route or street_number else None
     if not street:
-        street = org.get("address_subpremise") or None
+        street = org.get("address") or None  # fallback: full string
     postal_code = org.get("address_postal_code")
     city = org.get("address_locality")
     country_name = org.get("address_country")
