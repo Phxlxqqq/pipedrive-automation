@@ -125,6 +125,26 @@ def archive_deal_in_odoo(uid: int, pipedrive_deal_id: int) -> bool:
 
 
 # ---- Upsert Operations ----
+def _resolve_country_id(uid: int, country_name: str) -> int | None:
+    if not country_name:
+        return None
+    rows = odoo_search_read(uid, "res.country", [("name", "ilike", country_name)], fields=["id"], limit=1)
+    if not rows:
+        # try by code (e.g. "DE")
+        rows = odoo_search_read(uid, "res.country", [("code", "=", country_name.upper())], fields=["id"], limit=1)
+    return rows[0]["id"] if rows else None
+
+
+def _resolve_state_id(uid: int, state_name: str, country_id: int | None) -> int | None:
+    if not state_name:
+        return None
+    domain = [("name", "ilike", state_name)]
+    if country_id:
+        domain.append(("country_id", "=", country_id))
+    rows = odoo_search_read(uid, "res.country.state", domain, fields=["id"], limit=1)
+    return rows[0]["id"] if rows else None
+
+
 def upsert_org(uid: int, org_id: int) -> int:
     """Upsert organization from Pipedrive to Odoo."""
     org = pd_get(f"/organizations/{org_id}")
@@ -147,6 +167,31 @@ def upsert_org(uid: int, org_id: int) -> int:
     odoo_lang = map_lang_to_odoo(pd_lang)
     if odoo_lang:
         vals["lang"] = odoo_lang
+
+    # Address fields from Pipedrive
+    route = org.get("address_route") or ""
+    street_number = org.get("address_street_number") or ""
+    street = f"{route} {street_number}".strip() if route or street_number else None
+    if not street:
+        street = org.get("address_subpremise") or None
+    postal_code = org.get("address_postal_code")
+    city = org.get("address_locality")
+    country_name = org.get("address_country")
+    state_name = org.get("address_admin_area_level_1")
+
+    country_id = _resolve_country_id(uid, country_name) if country_name else None
+    state_id = _resolve_state_id(uid, state_name, country_id) if state_name else None
+
+    if street:
+        vals["street"] = street
+    if postal_code:
+        vals["zip"] = postal_code
+    if city:
+        vals["city"] = city
+    if country_id:
+        vals["country_id"] = country_id
+    if state_id:
+        vals["state_id"] = state_id
 
     if mapped:
         odoo_write(uid, "res.partner", mapped, vals)
