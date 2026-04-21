@@ -407,11 +407,12 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         return
     partner_id = lead_data[0]["partner_id"][0]
 
-    # Use company (parent) as partner for sale.order, not the individual contact
-    partner_data = odoo_search_read(uid, "res.partner", [("id", "=", partner_id)],
-                                     fields=["parent_id", "is_company"], limit=1)
-    if partner_data and not partner_data[0].get("is_company") and partner_data[0].get("parent_id"):
-        partner_id = partner_data[0]["parent_id"][0]
+    # Get salesperson from Pipedrive deal owner
+    from pipedrive import pd_get as _pd_get
+    deal_data = _pd_get(f"/deals/{pd_deal_id}")
+    pd_owner = deal_data.get("user_id")
+    owner_id = pd_owner.get("id") if isinstance(pd_owner, dict) else pd_owner
+    odoo_user_id = OWNER_MAP.get(int(owner_id)) if owner_id else None
 
     # Get EUR currency ID
     eur_ids = odoo_search(uid, "res.currency", [("name", "=", "EUR")], limit=1)
@@ -436,8 +437,12 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
                               args=[[("order_id", "=", order_id)]])
         if lines:
             odoo_execute(uid, "sale.order.line", "unlink", args=[lines])
+        update_vals = {"partner_id": partner_id}
         if eur_currency_id:
-            odoo_write(uid, "sale.order", order_id, {"currency_id": eur_currency_id})
+            update_vals["currency_id"] = eur_currency_id
+        if odoo_user_id:
+            update_vals["user_id"] = odoo_user_id
+        odoo_write(uid, "sale.order", order_id, update_vals)
         print(f"ODOO QUOTE: Updating existing order {order_id} for lead {odoo_lead_id}")
     else:
         order_vals = {
@@ -447,6 +452,8 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         }
         if eur_currency_id:
             order_vals["currency_id"] = eur_currency_id
+        if odoo_user_id:
+            order_vals["user_id"] = odoo_user_id
         order_id = odoo_create(uid, "sale.order", order_vals)
         print(f"ODOO QUOTE: Created sale.order {order_id} for lead {odoo_lead_id}")
 
