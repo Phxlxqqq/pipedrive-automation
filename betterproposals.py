@@ -8,7 +8,7 @@ from collections import Counter
 from decimal import Decimal, ROUND_HALF_UP
 import requests
 from config import BP_API_KEY, BP_API_KEYS, BP_BASE
-from pipedrive import pd_replace_deal_products, pd_add_note_to_deal
+from pipedrive import pd_replace_deal_products, pd_add_note_to_deal, pd_put
 
 
 def bp_headers(api_key: str = None):
@@ -292,6 +292,137 @@ def _build_note(event_type: str, included: list, excluded: list, currency: str) 
             lines.append(f"    {p['name']} \u2014 {price_str}{recurring}")
 
     return "\n".join(lines)
+
+
+def bp_get_onboarding_data(proposal_id: str, api_key: str = None) -> list | dict | None:
+    """Fetch onboarding form responses for a signed proposal."""
+    headers = bp_headers(api_key)
+    for endpoint in [f"/proposal/{proposal_id}/onboarding", f"/onboarding/{proposal_id}"]:
+        try:
+            r = requests.get(f"{BP_BASE}{endpoint}", headers=headers, timeout=30)
+            if r.ok:
+                data = r.json()
+                if data.get("status") != "error" and data.get("data"):
+                    print(f"BP ONBOARDING: Found data via {endpoint}")
+                    return data.get("data")
+        except Exception:
+            pass
+
+    # Fall back to proposal response fields
+    try:
+        proposal = bp_get_proposal(proposal_id)
+        for field in ["OnboardingData", "Onboarding", "FormData", "QuestionsAndAnswers", "ClientFields"]:
+            if proposal.get(field):
+                return proposal.get(field)
+    except Exception:
+        pass
+    return None
+
+
+def bp_format_onboarding_note(onboarding_data) -> str:
+    """Format BP onboarding responses as a readable Pipedrive note."""
+    lines = ["📋 Onboarding-Informationen (Proposal signiert)", ""]
+
+    if isinstance(onboarding_data, list):
+        for section in onboarding_data:
+            if not isinstance(section, dict):
+                continue
+            title = section.get("Title") or section.get("title") or section.get("name") or ""
+            if title:
+                lines.append(f"▸ {title}")
+            fields = (section.get("Fields") or section.get("fields")
+                      or section.get("answers") or section.get("Questions") or [])
+            for field in fields:
+                if isinstance(field, dict):
+                    label = (field.get("Label") or field.get("label")
+                             or field.get("question") or field.get("Name") or "")
+                    value = (field.get("Value") or field.get("value")
+                             or field.get("answer") or field.get("Answer") or "—")
+                    if label:
+                        lines.append(f"  • {label}: {value}")
+            lines.append("")
+    elif isinstance(onboarding_data, dict):
+        for key, value in onboarding_data.items():
+            if value and not key.startswith("_"):
+                lines.append(f"• {key}: {value}")
+
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
+def bp_sync_signed(proposal_id: str, deal_id: int):
+    """
+    Handle a signed proposal:
+    1. Fetch onboarding form responses → add as note to Pipedrive deal
+    2. Try to attach PDF to Pipedrive deal
+    """
+    from pipedrive import pd_upload_file_to_deal
+
+    print(f"BP SIGNED: Processing signed proposal {proposal_id} for deal {deal_id}")
+
+    # Fetch proposal (try all API keys)
+    proposal = None
+    api_key_used = None
+    for key in BP_API_KEYS:
+        try:
+            r = requests.get(f"{BP_BASE}/proposal/{proposal_id}",
+                             headers=bp_headers(key), timeout=30)
+            if r.ok:
+                data = r.json()
+                if data.get("status") != "error" and data.get("data"):
+                    proposal = data.get("data", {})
+                    api_key_used = key
+                    break
+        except Exception:
+            pass
+    if not proposal:
+        try:
+            proposal = bp_get_proposal(proposal_id)
+        except Exception as e:
+            print(f"BP SIGNED: Could not fetch proposal {proposal_id}: {e}")
+            return
+
+    # 1. Update Pipedrive deal value from proposal total
+    try:
+        included, _ = bp_parse_line_items(proposal)
+        total_net = sum(p.get("net_price", p["price"]) for p in included)
+        if total_net:
+            pd_put(f"/deals/{deal_id}", {"value": round(total_net, 2)})
+            print(f"BP SIGNED: Updated deal {deal_id} value to {total_net:.2f}")
+    except Exception as e:
+        print(f"BP SIGNED: Could not update deal value: {e}")
+
+    # 2. Onboarding note
+    onboarding_data = bp_get_onboarding_data(proposal_id, api_key=api_key_used)
+    if onboarding_data:
+        note = bp_format_onboarding_note(onboarding_data)
+        if note:
+            pd_add_note_to_deal(deal_id, note)
+            print(f"BP SIGNED: Added onboarding note to deal {deal_id}")
+        else:
+            pd_add_note_to_deal(deal_id, f"📋 Proposal signiert. Onboarding-Rohdaten:\n{str(onboarding_data)[:1000]}")
+    else:
+        print(f"BP SIGNED: No onboarding data found for proposal {proposal_id}")
+        pd_add_note_to_deal(deal_id, "✅ Proposal signiert. Keine Onboarding-Daten über BP API verfügbar.")
+
+    # 2. PDF attachment
+    pdf_url = None
+    for field in ["PdfUrl", "PDF", "DownloadUrl", "DocumentUrl", "FileUrl", "SignedPdfUrl"]:
+        url = proposal.get(field)
+        if url and str(url).startswith("http"):
+            pdf_url = url
+            break
+
+    if pdf_url:
+        try:
+            r = requests.get(pdf_url, timeout=60)
+            if r.ok:
+                filename = f"Proposal_{proposal_id}_signed.pdf"
+                pd_upload_file_to_deal(deal_id, filename, r.content)
+                print(f"BP SIGNED: Attached PDF to deal {deal_id}")
+        except Exception as e:
+            print(f"BP SIGNED: Could not attach PDF: {e}")
+    else:
+        print(f"BP SIGNED: No PDF URL in proposal response (fields: {list(proposal.keys())})")
 
 
 def bp_sync_products_to_deal(proposal_id: str, deal_id: int, event_type: str = None):

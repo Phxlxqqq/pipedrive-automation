@@ -296,3 +296,18 @@ def pd_add_note_to_deal(deal_id: int, content: str) -> dict:
         "deal_id": deal_id,
         "content": content
     })
+
+
+# ---- Files ----
+def pd_upload_file_to_deal(deal_id: int, filename: str, content: bytes) -> dict:
+    """Upload a file and attach it to a Pipedrive deal."""
+    import io
+    r = requests.post(
+        f"{PIPEDRIVE_BASE}/files",
+        params={"api_token": PIPEDRIVE_TOKEN},
+        files={"file": (filename, io.BytesIO(content), "application/pdf")},
+        data={"deal_id": deal_id},
+        timeout=60
+    )
+    r.raise_for_status()
+    return r.json().get("data", {})

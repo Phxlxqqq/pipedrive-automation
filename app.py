@@ -377,9 +377,12 @@ async def betterproposals_webhook(req: Request):
 
     if proposal_id and deal_id:
         try:
-            from betterproposals import bp_sync_products_to_deal
+            from betterproposals import bp_sync_products_to_deal, bp_sync_signed
+            is_signed = event_type and "sign" in str(event_type).lower()
             bp_sync_products_to_deal(str(proposal_id), int(deal_id), event_type)
             _schedule_odoo_quotation(int(deal_id))
+            if is_signed:
+                bp_sync_signed(str(proposal_id), int(deal_id))
         except Exception as e:
             print(f"BP WEBHOOK ERROR: {e}")
             return {"ok": False, "error": str(e)}
