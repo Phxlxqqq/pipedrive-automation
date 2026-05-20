@@ -435,6 +435,19 @@ def test_bp_sync(req: Request, proposal_id: str, deal_id: int):
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
+@app.get("/test/bp/signed/{proposal_id}/{deal_id}")
+def test_bp_signed_sync(req: Request, proposal_id: str, deal_id: int):
+    """Test the full signed proposal flow: value update + onboarding note + PDF."""
+    _check_test_token(req)
+    from betterproposals import bp_sync_products_to_deal, bp_sync_signed
+    try:
+        bp_sync_products_to_deal(proposal_id, deal_id, "signed")
+        bp_sync_signed(proposal_id, deal_id)
+        return {"status": "ok", "synced": True}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
 # ---- Health Endpoints ----
 @app.get("/")
 def root():
