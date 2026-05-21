@@ -401,8 +401,17 @@ def bp_sync_signed(proposal_id: str, deal_id: int):
         else:
             pd_add_note_to_deal(deal_id, f"📋 Proposal signiert. Onboarding-Rohdaten:\n{str(onboarding_data)[:1000]}")
     else:
-        print(f"BP SIGNED: No onboarding data found for proposal {proposal_id}")
-        pd_add_note_to_deal(deal_id, "✅ Proposal signiert. Keine Onboarding-Daten über BP API verfügbar.")
+        signed_name = proposal.get("SignedName", "—")
+        signed_date = proposal.get("SignedDate", "—")
+        signed_time = proposal.get("SignedTime", "")
+        note = (
+            f"✅ Proposal signiert\n\n"
+            f"• Unterzeichnet von: {signed_name}\n"
+            f"• Datum: {signed_date} {signed_time}\n\n"
+            f"Onboarding-Daten folgen sobald die BP API diese bereitstellt."
+        )
+        pd_add_note_to_deal(deal_id, note)
+        print(f"BP SIGNED: Added basic signed note to deal {deal_id}")
 
     # 2. PDF attachment
     pdf_url = None

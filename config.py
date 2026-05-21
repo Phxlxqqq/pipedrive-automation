@@ -59,11 +59,20 @@ BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 # ---- Pipeline Allowlist + Odoo Team Mapping ----
 # Only deals in these Pipedrive pipelines will be synced to Odoo.
 # Value maps pipedrive pipeline_id -> odoo crm.team id (team_id).
-# Note: Pipeline 6 is NOT synced to Odoo - it's only for Surfe triggers
 PIPELINE_MAP = {
-    4: 1,   # Original pipeline -> Odoo Team 1
+    4:  1,   # New Business -> Odoo Team 1
+    11: 1,   # Recurring Business -> Odoo Team 1
     # Pipeline 6 is intentionally NOT included - Surfe-only, no Odoo sync
 }
+
+# Human-readable labels per pipeline (used in notes)
+PIPELINE_LABELS = {
+    4:  "New Business",
+    11: "Recurring Business",
+}
+
+# Pipelines that trigger Odoo quotation creation on Won
+WON_SYNC_PIPELINES = {4, 11}
 
 # Pipelines where Germany team filter is NOT applied (all owners allowed)
 SURFE_ONLY_PIPELINES = {6}

@@ -12,7 +12,8 @@ from fastapi.responses import JSONResponse
 
 from config import (
     WEBHOOK_TOKEN, SURFE_WEBHOOK_TOKEN, BP_WEBHOOK_TOKEN, DB_PATH,
-    DOWNLOAD_STAGE_ID, LEADFEEDER_STAGE_ID, SURFE_ONLY_PIPELINES
+    DOWNLOAD_STAGE_ID, LEADFEEDER_STAGE_ID, SURFE_ONLY_PIPELINES,
+    WON_SYNC_PIPELINES, PIPELINE_LABELS, OWNER_MAP
 )
 from db import event_seen, get_enrichment, complete_enrichment
 from odoo import odoo_login, upsert_org, upsert_person, upsert_deal, archive_deal_in_odoo, upsert_deal_quotation
@@ -143,12 +144,22 @@ async def pipedrive_webhook(req: Request):
 
         if not skip_odoo_sync:
             upsert_deal(uid, deal_id)
-            # Update Odoo quotation if deal already has products
+            # On Won: create/update Odoo quotation for qualifying pipelines
             try:
-                if pd_get_deal_products(deal_id):
+                deal_data = pd_get(f"/deals/{deal_id}")
+                deal_status = deal_data.get("status")
+                deal_pipeline = deal_data.get("pipeline_id")
+                deal_owner = deal_data.get("user_id")
+                owner_id = deal_owner.get("id") if isinstance(deal_owner, dict) else deal_owner
+                if (deal_status == "won"
+                        and deal_pipeline and int(deal_pipeline) in WON_SYNC_PIPELINES
+                        and owner_id and int(owner_id) in OWNER_MAP):
+                    pipeline_label = PIPELINE_LABELS.get(int(deal_pipeline), f"Pipeline {deal_pipeline}")
+                    pd_add_note_to_deal(deal_id, f"🏆 Deal gewonnen — {pipeline_label}")
                     upsert_deal_quotation(uid, deal_id)
+                    print(f"ODOO QUOTE: Won deal {deal_id} ({pipeline_label}) → quotation synced")
             except Exception as e:
-                print(f"ODOO QUOTE UPDATE: Error for deal {deal_id}: {e}")
+                print(f"ODOO QUOTE WON: Error for deal {deal_id}: {e}")
         else:
             print(f"SKIP ODOO: Deal {deal_id} is in Surfe-only pipeline")
     else:
@@ -380,7 +391,6 @@ async def betterproposals_webhook(req: Request):
             from betterproposals import bp_sync_products_to_deal, bp_sync_signed
             is_signed = event_type and "sign" in str(event_type).lower()
             bp_sync_products_to_deal(str(proposal_id), int(deal_id), event_type)
-            _schedule_odoo_quotation(int(deal_id))
             if is_signed:
                 bp_sync_signed(str(proposal_id), int(deal_id))
         except Exception as e:
