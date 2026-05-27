@@ -411,7 +411,7 @@ def _find_product_variant_id(uid: int, template_id: int) -> int | None:
 def upsert_deal_quotation(uid: int, pd_deal_id: int):
     """
     Create or update Odoo sale.order from Pipedrive deal products.
-    Called ~3 minutes after BP sync so products are already in Pipedrive.
+    Creates an empty order if no products exist (lines can be added manually in Odoo).
     """
     from pipedrive import pd_get_deal_products
 
@@ -484,7 +484,7 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         order_id = odoo_create(uid, "sale.order", order_vals)
         print(f"ODOO QUOTE: Created sale.order {order_id} for lead {odoo_lead_id}")
 
-    # Add order lines
+    # Add order lines (only if products exist)
     variant_cache = {}
     for p in pd_products:
         name = p.get("name", "")
@@ -517,15 +517,16 @@ def upsert_deal_quotation(uid: int, pd_deal_id: int):
         odoo_execute(uid, "sale.order.line", "create", args=[line_vals])
         print(f"ODOO QUOTE: Added '{name}' ({quantity}x €{net_price})")
 
-    print(f"ODOO QUOTE: Done - order {order_id} updated for deal {pd_deal_id}")
+    print(f"ODOO QUOTE: Done - order {order_id} updated for deal {pd_deal_id} ({len(pd_products)} product(s))")
 
-    # Update crm.lead expected_revenue (total net, all products)
-    total_revenue = sum(
-        round(float(p.get("item_price", 0)) * (1 - float(p.get("discount", 0)) / 100), 2) * float(p.get("quantity", 1))
-        for p in pd_products
-    )
-    try:
-        odoo_write(uid, "crm.lead", odoo_lead_id, {"expected_revenue": round(total_revenue, 2)})
-        print(f"ODOO QUOTE: Updated lead {odoo_lead_id} - expected_revenue: {total_revenue:.2f}")
-    except Exception as e:
-        print(f"ODOO QUOTE: Could not update lead revenue fields: {e}")
+    # Update crm.lead expected_revenue only if products are present
+    if pd_products:
+        total_revenue = sum(
+            round(float(p.get("item_price", 0)) * (1 - float(p.get("discount", 0)) / 100), 2) * float(p.get("quantity", 1))
+            for p in pd_products
+        )
+        try:
+            odoo_write(uid, "crm.lead", odoo_lead_id, {"expected_revenue": round(total_revenue, 2)})
+            print(f"ODOO QUOTE: Updated lead {odoo_lead_id} - expected_revenue: {total_revenue:.2f}")
+        except Exception as e:
+            print(f"ODOO QUOTE: Could not update lead revenue fields: {e}")

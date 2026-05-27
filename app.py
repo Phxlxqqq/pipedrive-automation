@@ -458,6 +458,57 @@ def test_bp_signed_sync(req: Request, proposal_id: str, deal_id: int):
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
+@app.get("/test/odoo/quote/{deal_id}")
+def test_odoo_quote(req: Request, deal_id: int):
+    """Diagnose + trigger Odoo quotation for a Pipedrive deal. Returns state at each step."""
+    _check_test_token(req)
+    from db import mapping_get
+    from pipedrive import pd_get_deal_products
+    info = {}
+    try:
+        uid = odoo_login()
+        info["odoo_login"] = "ok"
+
+        # Step 1: ensure deal is synced to Odoo
+        upsert_result = upsert_deal(uid, deal_id)
+        info["upsert_deal_result"] = upsert_result
+
+        odoo_lead_id = mapping_get("deal", deal_id)
+        info["odoo_lead_id"] = odoo_lead_id
+        if not odoo_lead_id:
+            info["error"] = "No Odoo lead mapping after upsert — deal may be in wrong pipeline or owner"
+            return JSONResponse(status_code=422, content=info)
+
+        # Step 2: check products
+        pd_products = pd_get_deal_products(deal_id)
+        info["pipedrive_product_count"] = len(pd_products)
+        info["pipedrive_products"] = [p.get("name") for p in pd_products]
+        if not pd_products:
+            info["error"] = "No products on Pipedrive deal — add products first (via BP sync or manually)"
+            return JSONResponse(status_code=422, content=info)
+
+        # Step 3: check partner on Odoo lead
+        from odoo import odoo_search_read
+        lead_data = odoo_search_read(uid, "crm.lead",
+                                      [("id", "=", odoo_lead_id), ("active", "in", [True, False])],
+                                      fields=["partner_id", "name"], limit=1)
+        info["odoo_lead_name"] = lead_data[0]["name"] if lead_data else None
+        partner_field = lead_data[0].get("partner_id") if lead_data else None
+        info["odoo_partner_id"] = partner_field[0] if isinstance(partner_field, list) else partner_field
+        if not partner_field:
+            info["error"] = "Odoo lead has no partner — link person or org to this deal in Pipedrive first"
+            return JSONResponse(status_code=422, content=info)
+
+        # Step 4: run quotation sync
+        upsert_deal_quotation(uid, deal_id)
+        info["quotation"] = "created_or_updated"
+        return {"status": "ok", **info}
+
+    except Exception as e:
+        info["exception"] = str(e)
+        return JSONResponse(status_code=500, content={"status": "error", **info})
+
+
 # ---- Health Endpoints ----
 @app.get("/")
 def root():
