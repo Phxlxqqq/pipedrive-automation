@@ -145,12 +145,14 @@ def _resolve_state_id(uid: int, state_name: str, country_id: int | None) -> int 
     return rows[0]["id"] if rows else None
 
 
-def upsert_org(uid: int, org_id: int) -> int:
-    """Upsert organization from Pipedrive to Odoo."""
+def upsert_org(uid: int, org_id: int, force: bool = False) -> int:
+    """Upsert organization from Pipedrive to Odoo.
+    force=True skips the owner filter (used when called from a deal that already passed the filter).
+    """
     org = pd_get(f"/organizations/{org_id}")
 
     org_owner_id = pd_owner_id(org)
-    if not owner_allowed(org_owner_id):
+    if not force and not owner_allowed(org_owner_id):
         print(f"SKIP org {org_id}: owner {org_owner_id} not in Germany team")
         return -1
 
@@ -222,19 +224,21 @@ def upsert_org(uid: int, org_id: int) -> int:
     return odoo_id
 
 
-def upsert_person(uid: int, person_id: int) -> int:
-    """Upsert person from Pipedrive to Odoo."""
+def upsert_person(uid: int, person_id: int, force: bool = False) -> int:
+    """Upsert person from Pipedrive to Odoo.
+    force=True skips the owner filter (used when called from a deal that already passed the filter).
+    """
     p = pd_get(f"/persons/{person_id}")
 
     person_owner_id = pd_owner_id(p)
-    if not owner_allowed(person_owner_id):
+    if not force and not owner_allowed(person_owner_id):
         print(f"SKIP person {person_id}: owner {person_owner_id} not in Germany team")
         return -1
 
     name = p.get("name") or f"Person {person_id}"
 
     org_id = pd_val(p.get("org_id"))
-    parent_id = upsert_org(uid, int(org_id)) if org_id else None
+    parent_id = upsert_org(uid, int(org_id), force=True) if org_id else None
     if parent_id == -1:
         parent_id = None
 
@@ -321,11 +325,11 @@ def upsert_deal(uid: int, deal_id: int) -> int:
 
     partner_id = None
     if person_id:
-        partner_id = upsert_person(uid, int(person_id))
+        partner_id = upsert_person(uid, int(person_id), force=True)
         if partner_id == -1:
             partner_id = None
     elif org_id:
-        partner_id = upsert_org(uid, int(org_id))
+        partner_id = upsert_org(uid, int(org_id), force=True)
         if partner_id == -1:
             partner_id = None
 
