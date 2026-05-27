@@ -65,13 +65,19 @@ def mapping_get(obj_type: str, external_id: str):
     return row[0] if row else None
 
 
-def mapping_set(obj_type: str, external_id: str, odoo_id: int):
-    """Save mapping between Pipedrive and Odoo objects."""
+def mapping_set(obj_type: str, external_id: str, odoo_id: int | None):
+    """Save mapping between Pipedrive and Odoo objects. Pass None to delete stale mapping."""
     con = get_con()
-    con.execute(
-        "INSERT OR REPLACE INTO mapping(object_type, external_id, odoo_id) VALUES(?,?,?)",
-        (obj_type, str(external_id), int(odoo_id))
-    )
+    if odoo_id is None:
+        con.execute(
+            "DELETE FROM mapping WHERE object_type=? AND external_id=?",
+            (obj_type, str(external_id))
+        )
+    else:
+        con.execute(
+            "INSERT OR REPLACE INTO mapping(object_type, external_id, odoo_id) VALUES(?,?,?)",
+            (obj_type, str(external_id), int(odoo_id))
+        )
     con.commit()
     con.close()
 

@@ -201,8 +201,15 @@ def upsert_org(uid: int, org_id: int) -> int:
         vals["state_id"] = state_id
 
     if mapped:
-        odoo_write(uid, "res.partner", mapped, vals)
-        return mapped
+        try:
+            odoo_write(uid, "res.partner", mapped, vals)
+            return mapped
+        except Exception as e:
+            if "MissingError" in str(e) or "does not exist" in str(e):
+                print(f"ODOO: Stale org mapping {org_id} → {mapped}, clearing and retrying")
+                mapping_set("org", org_id, None)
+            else:
+                raise
 
     found = odoo_search(uid, "res.partner", [("name", "=", name), ("is_company", "=", True)], limit=1)
     if found:
@@ -261,8 +268,15 @@ def upsert_person(uid: int, person_id: int) -> int:
         vals["lang"] = odoo_lang
 
     if mapped:
-        odoo_write(uid, "res.partner", mapped, vals)
-        return mapped
+        try:
+            odoo_write(uid, "res.partner", mapped, vals)
+            return mapped
+        except Exception as e:
+            if "MissingError" in str(e) or "does not exist" in str(e):
+                print(f"ODOO: Stale person mapping {person_id} → {mapped}, clearing and retrying")
+                mapping_set("person", person_id, None)
+            else:
+                raise
 
     if email:
         found = odoo_search(uid, "res.partner", [("email", "=", email), ("is_company", "=", False)], limit=1)
@@ -352,8 +366,15 @@ def upsert_deal(uid: int, deal_id: int) -> int:
         vals["stage_id"] = odoo_stage_id
 
     if mapped:
-        odoo_write(uid, "crm.lead", mapped, vals)
-        return mapped
+        try:
+            odoo_write(uid, "crm.lead", mapped, vals)
+            return mapped
+        except Exception as e:
+            if "MissingError" in str(e) or "does not exist" in str(e):
+                print(f"ODOO: Stale deal mapping {deal_id} → {mapped}, clearing and retrying")
+                mapping_set("deal", deal_id, None)
+            else:
+                raise
 
     existing = find_existing_deal_in_odoo(uid, title=title, partner_id=partner_id, team_id=odoo_team_id)
     if existing:
