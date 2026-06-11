@@ -50,6 +50,22 @@ def get_con():
             synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS batch_enrichments (
+            enrichment_id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            company_name TEXT NOT NULL,
+            website TEXT,
+            country TEXT,
+            status TEXT DEFAULT 'pending',
+            contact_name TEXT,
+            contact_title TEXT,
+            contact_email TEXT,
+            contact_phone TEXT,
+            contact_linkedin TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     return con
 
 
@@ -198,6 +214,56 @@ def bp_deal_already_synced(deal_id: int) -> bool:
     ).fetchone()
     con.close()
     return row is not None
+
+
+# ---- Batch Enrichment (Excel bulk import) ----
+def batch_save_enrichment(enrichment_id: str, batch_id: str, company_name: str,
+                           website: str = None, country: str = None):
+    con = get_con()
+    con.execute("""
+        INSERT OR REPLACE INTO batch_enrichments
+        (enrichment_id, batch_id, company_name, website, country)
+        VALUES (?, ?, ?, ?, ?)
+    """, (enrichment_id, batch_id, company_name, website, country))
+    con.commit()
+    con.close()
+
+
+def batch_get_enrichment(enrichment_id: str) -> dict | None:
+    con = get_con()
+    row = con.execute(
+        "SELECT enrichment_id, batch_id, company_name FROM batch_enrichments WHERE enrichment_id = ?",
+        (enrichment_id,)
+    ).fetchone()
+    con.close()
+    return {"enrichment_id": row[0], "batch_id": row[1], "company_name": row[2]} if row else None
+
+
+def batch_complete_enrichment(enrichment_id: str, contact_name: str = None,
+                               contact_title: str = None, contact_email: str = None,
+                               contact_phone: str = None, contact_linkedin: str = None):
+    con = get_con()
+    con.execute("""
+        UPDATE batch_enrichments
+        SET status='completed', contact_name=?, contact_title=?,
+            contact_email=?, contact_phone=?, contact_linkedin=?
+        WHERE enrichment_id=?
+    """, (contact_name, contact_title, contact_email, contact_phone, contact_linkedin, enrichment_id))
+    con.commit()
+    con.close()
+
+
+def batch_get_results(batch_id: str) -> list:
+    con = get_con()
+    rows = con.execute("""
+        SELECT company_name, website, country, status,
+               contact_name, contact_title, contact_email, contact_phone, contact_linkedin
+        FROM batch_enrichments WHERE batch_id=? ORDER BY company_name
+    """, (batch_id,)).fetchall()
+    con.close()
+    keys = ["company_name", "website", "country", "status",
+            "contact_name", "contact_title", "contact_email", "contact_phone", "contact_linkedin"]
+    return [dict(zip(keys, r)) for r in rows]
 
 
 def bp_mark_deal_synced(deal_id: int, proposal_id: str):

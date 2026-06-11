@@ -124,6 +124,79 @@ def surfe_search_people(domain: str = None, company_name: str = None,
     return result.get("people", [])
 
 
+# ---- Batch Enrichment ----
+def start_batch_enrichment(batch_id: str, companies: list) -> dict:
+    """Search for ICP contact + start email enrichment for each company."""
+    import time
+    from db import batch_save_enrichment
+
+    started, skipped = [], []
+
+    for company in companies:
+        name = (company.get("Company Name") or company.get("name") or "").strip()
+        website = (company.get("Website") or company.get("website") or "").strip()
+        country = (company.get("Country") or company.get("country") or "").strip()
+
+        if not name:
+            continue
+
+        domain = extract_domain_from_website(website) if website else None
+
+        try:
+            people = surfe_search_people(
+                domain=domain,
+                company_name=name if not domain else None,
+                job_titles=ICP_JOB_TITLES,
+                limit=10
+            )
+            if not people:
+                people = surfe_search_people(
+                    domain=domain,
+                    company_name=name if not domain else None,
+                    limit=5
+                )
+
+            if not people:
+                skipped.append({"company": name, "reason": "no_people_found"})
+                time.sleep(0.5)
+                continue
+
+            best = select_best_icp_person(people, target_company=name)
+            if not best:
+                skipped.append({"company": name, "reason": "no_icp_match"})
+                time.sleep(0.5)
+                continue
+
+            result = surfe_enrich_person(
+                first_name=best.get("firstName"),
+                last_name=best.get("lastName"),
+                linkedin_url=best.get("linkedInUrl"),
+                company_domain=domain,
+                company_name=name if not domain else None
+            )
+            enrichment_id = result.get("enrichmentID")
+            if enrichment_id:
+                batch_save_enrichment(enrichment_id, batch_id, name, website, country)
+                started.append({"company": name, "enrichment_id": enrichment_id,
+                                 "contact": f"{best.get('firstName','')} {best.get('lastName','')}".strip(),
+                                 "title": best.get("jobTitle")})
+            else:
+                skipped.append({"company": name, "reason": "no_enrichment_id"})
+
+        except Exception as e:
+            skipped.append({"company": name, "reason": str(e)})
+
+        time.sleep(0.3)  # avoid rate limiting
+
+    return {
+        "batch_id": batch_id,
+        "started": len(started),
+        "skipped": len(skipped),
+        "details_started": started,
+        "details_skipped": skipped,
+    }
+
+
 # ---- Stage Handlers ----
 def handle_download_stage(deal: dict):
     """

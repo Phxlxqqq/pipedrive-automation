@@ -289,6 +289,35 @@ def pd_replace_deal_products(deal_id: int, products: list[dict]) -> list:
     return added
 
 
+# ---- Deal Listing ----
+def pd_get_all_won_deals(pipeline_ids: list) -> list:
+    """Fetch all won deals from the given pipeline IDs (handles pagination)."""
+    all_deals = []
+    for pipeline_id in pipeline_ids:
+        start = 0
+        while True:
+            r = requests.get(
+                f"{PIPEDRIVE_BASE}/deals",
+                params={
+                    "api_token": PIPEDRIVE_TOKEN,
+                    "status": "won",
+                    "pipeline_id": pipeline_id,
+                    "limit": 500,
+                    "start": start,
+                },
+                timeout=30
+            )
+            r.raise_for_status()
+            js = r.json()
+            data = js.get("data") or []
+            all_deals.extend(data)
+            more = js.get("additional_data", {}).get("pagination", {}).get("more_items_in_collection")
+            if not more:
+                break
+            start += 500
+    return all_deals
+
+
 # ---- Notes ----
 def pd_add_note_to_deal(deal_id: int, content: str) -> dict:
     """Add a note to a deal in Pipedrive."""

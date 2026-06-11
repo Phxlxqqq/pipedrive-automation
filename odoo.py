@@ -89,24 +89,25 @@ def find_existing_deal_in_odoo(uid: int, title: str, partner_id: int | None, tea
     """
     base_filters = [("type", "=", "opportunity"), ("active", "in", [True, False])]
 
-    # 1) name + partner (best)
+    # 1) name + partner (best match)
     if partner_id:
         domain = base_filters + [("name", "=", title), ("partner_id", "=", partner_id)]
         if team_id:
             domain.append(("team_id", "=", team_id))
-
         rows = odoo_search_read(uid, "crm.lead", domain, fields=["id"], limit=1)
         if rows:
             return rows[0]["id"]
 
-    # 2) name only, but only if it's unique
+    # 2) name + team (any number of results — take oldest to avoid creating more duplicates)
     domain = base_filters + [("name", "=", title)]
     if team_id:
         domain.append(("team_id", "=", team_id))
-
-    rows = odoo_search_read(uid, "crm.lead", domain, fields=["id"], limit=2)
-    if len(rows) == 1:
-        return rows[0]["id"]
+    rows = odoo_search_read(uid, "crm.lead", domain, fields=["id"], limit=50)
+    if rows:
+        oldest_id = min(r["id"] for r in rows)
+        if len(rows) > 1:
+            print(f"ODOO FIND: {len(rows)} leads named '{title}', using oldest ({oldest_id}) to avoid duplicate")
+        return oldest_id
 
     return None
 

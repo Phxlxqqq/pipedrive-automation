@@ -15,7 +15,7 @@ from config import (
     DOWNLOAD_STAGE_ID, LEADFEEDER_STAGE_ID, SURFE_ONLY_PIPELINES,
     WON_SYNC_PIPELINES, PIPELINE_LABELS, OWNER_MAP
 )
-from db import event_seen, get_enrichment, complete_enrichment
+from db import event_seen, get_enrichment, complete_enrichment, batch_get_enrichment, batch_complete_enrichment
 from odoo import odoo_login, upsert_org, upsert_person, upsert_deal, archive_deal_in_odoo, upsert_deal_quotation
 from pipedrive import (
     pd_get, pd_val, pd_create_person, pd_update_person,
@@ -227,6 +227,27 @@ async def surfe_webhook(req: Request):
     if not person_data:
         print(f"SURFE: No person data in enrichment result {enrichment_id}")
         return {"ok": True, "no_results": True}
+
+    # Check if this is a batch enrichment
+    batch_entry = batch_get_enrichment(enrichment_id)
+    if batch_entry:
+        emails = person_data.get("emails", [])
+        email = next((e["email"] for e in emails if e.get("validationStatus") == "VALID"), None)
+        if not email and emails:
+            email = emails[0].get("email")
+        phone_list = sorted(person_data.get("mobilePhones", []),
+                            key=lambda x: x.get("confidenceScore", 0), reverse=True)
+        phone = phone_list[0].get("mobilePhone") if phone_list else None
+        batch_complete_enrichment(
+            enrichment_id,
+            contact_name=f"{person_data.get('firstName','')} {person_data.get('lastName','')}".strip(),
+            contact_title=person_data.get("jobTitle"),
+            contact_email=email,
+            contact_phone=phone,
+            contact_linkedin=person_data.get("linkedInUrl"),
+        )
+        print(f"SURFE BATCH: Saved result for {batch_entry['company_name']} (batch {batch_entry['batch_id']})")
+        return {"ok": True, "batch": True}
 
     enrichment = get_enrichment(enrichment_id)
     if not enrichment:
@@ -456,6 +477,98 @@ def test_bp_signed_sync(req: Request, proposal_id: str, deal_id: int):
         return {"status": "ok", "synced": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+@app.post("/admin/batch-enrich")
+async def admin_batch_enrich(req: Request):
+    """Start batch enrichment for a list of companies from Excel.
+    Body: JSON array with objects containing 'Company Name', 'Website', 'Country'.
+    Returns immediately with batch_id — processing runs in background.
+    Poll GET /admin/batch-results/{batch_id} for results.
+    """
+    _check_test_token(req)
+    import uuid
+    from surfe import start_batch_enrichment
+
+    companies = await req.json()
+    if not isinstance(companies, list):
+        raise HTTPException(status_code=400, detail="Expected JSON array")
+
+    batch_id = str(uuid.uuid4())[:8]
+    print(f"BATCH ENRICH: Queued batch {batch_id} with {len(companies)} companies")
+
+    def _run():
+        try:
+            result = start_batch_enrichment(batch_id, companies)
+            print(f"BATCH ENRICH: Done — {result['started']} started, {result['skipped']} skipped")
+        except Exception as e:
+            print(f"BATCH ENRICH: Error in batch {batch_id}: {e}")
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return {"batch_id": batch_id, "queued": len(companies), "status": "running"}
+
+
+@app.get("/admin/batch-results/{batch_id}")
+def admin_batch_results(req: Request, batch_id: str):
+    """Get current enrichment results for a batch. Poll until all are completed."""
+    _check_test_token(req)
+    from db import batch_get_results
+    results = batch_get_results(batch_id)
+    completed = sum(1 for r in results if r["status"] == "completed")
+    return {
+        "batch_id": batch_id,
+        "total": len(results),
+        "completed": completed,
+        "pending": len(results) - completed,
+        "results": results,
+    }
+
+
+@app.get("/admin/sync-won-deals")
+def admin_sync_won_deals(req: Request):
+    """Bulk-sync all won deals from qualifying pipelines to Odoo (lead + quotation)."""
+    _check_test_token(req)
+    from pipedrive import pd_get_all_won_deals, pd_get_deal_products
+    results = {"synced": [], "skipped": [], "errors": []}
+    try:
+        uid = odoo_login()
+        deals = pd_get_all_won_deals(list(WON_SYNC_PIPELINES))
+        print(f"BULK SYNC: Found {len(deals)} won deals across pipelines {WON_SYNC_PIPELINES}")
+
+        for deal in deals:
+            deal_id = deal.get("id")
+            pd_owner = deal.get("user_id")
+            owner_id = pd_owner.get("id") if isinstance(pd_owner, dict) else pd_owner
+            title = deal.get("title", f"Deal {deal_id}")
+
+            if not owner_id or int(owner_id) not in OWNER_MAP:
+                results["skipped"].append({"deal_id": deal_id, "title": title, "reason": "owner_not_mapped"})
+                continue
+
+            try:
+                upsert_deal(uid, deal_id)
+                products = pd_get_deal_products(deal_id)
+                if products:
+                    upsert_deal_quotation(uid, deal_id)
+                    results["synced"].append({"deal_id": deal_id, "title": title, "products": len(products)})
+                else:
+                    results["skipped"].append({"deal_id": deal_id, "title": title, "reason": "no_products"})
+            except Exception as e:
+                print(f"BULK SYNC: Error on deal {deal_id}: {e}")
+                results["errors"].append({"deal_id": deal_id, "title": title, "error": str(e)})
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    results["summary"] = {
+        "total": len(results["synced"]) + len(results["skipped"]) + len(results["errors"]),
+        "synced": len(results["synced"]),
+        "skipped": len(results["skipped"]),
+        "errors": len(results["errors"]),
+    }
+    return results
 
 
 @app.get("/test/odoo/quote/{deal_id}")
