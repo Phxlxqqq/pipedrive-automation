@@ -16,16 +16,24 @@ SERVER_URL = "https://sync.audit-professionals.de"
 TOKEN = "bpWebhookToken_sicher_random_abc123"
 # -------------------------
 
-def start_batch(excel_path: str) -> str:
+def start_batch(excel_path: str, limit: int = 0, offset: int = 0) -> str:
     df = pd.read_excel(excel_path)
     companies = df.to_dict(orient="records")
     # Remove NaN values (pandas fills missing cells with NaN)
     cleaned = [{k: (str(v) if pd.notna(v) else "") for k, v in row.items()} for row in companies]
 
-    print(f"Sending {len(cleaned)} companies to server...")
+    if offset:
+        cleaned = cleaned[offset:]
+    total = len(cleaned)
+
+    params = {"token": TOKEN}
+    if limit:
+        params["limit"] = limit
+
+    print(f"Sending {min(limit, total) if limit else total} of {len(df)} companies to server (offset={offset})...")
     r = requests.post(
         f"{SERVER_URL}/admin/batch-enrich",
-        params={"token": TOKEN},
+        params=params,
         json=cleaned,
         timeout=30
     )
@@ -79,9 +87,11 @@ if __name__ == "__main__":
     parser.add_argument("excel", help="Path to Excel file")
     parser.add_argument("--results", help="Batch ID to fetch results for")
     parser.add_argument("--output", help="Output Excel filename", default=None)
+    parser.add_argument("--limit", type=int, default=0, help="Max companies per batch (e.g. 50)")
+    parser.add_argument("--offset", type=int, default=0, help="Skip first N companies")
     args = parser.parse_args()
 
     if args.results:
         poll_results(args.results, args.output)
     else:
-        start_batch(args.excel)
+        start_batch(args.excel, limit=args.limit, offset=args.offset)

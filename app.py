@@ -494,8 +494,12 @@ async def admin_batch_enrich(req: Request):
     if not isinstance(companies, list):
         raise HTTPException(status_code=400, detail="Expected JSON array")
 
+    limit = int(req.query_params.get("limit", 0)) or None
+    if limit:
+        companies = companies[:limit]
+
     batch_id = str(uuid.uuid4())[:8]
-    print(f"BATCH ENRICH: Queued batch {batch_id} with {len(companies)} companies")
+    print(f"BATCH ENRICH: Queued batch {batch_id} with {len(companies)} companies (limit={limit})")
 
     def _run():
         try:

@@ -143,17 +143,18 @@ def start_batch_enrichment(batch_id: str, companies: list) -> dict:
         domain = extract_domain_from_website(website) if website else None
 
         try:
+            # Request only 1 result to preserve daily quota (200 results/day on Pro plan)
             people = surfe_search_people(
                 domain=domain,
                 company_name=name if not domain else None,
                 job_titles=ICP_JOB_TITLES,
-                limit=10
+                limit=1
             )
             if not people:
                 people = surfe_search_people(
                     domain=domain,
                     company_name=name if not domain else None,
-                    limit=5
+                    limit=1
                 )
 
             if not people:
@@ -184,9 +185,14 @@ def start_batch_enrichment(batch_id: str, companies: list) -> dict:
                 skipped.append({"company": name, "reason": "no_enrichment_id"})
 
         except Exception as e:
-            skipped.append({"company": name, "reason": str(e)})
+            err = str(e)
+            if "QUOTA_EXCEEDED" in err or "403" in err:
+                print(f"SURFE BATCH: Quota exceeded after {len(started)} companies — stopping batch")
+                skipped.append({"company": name, "reason": "quota_exceeded"})
+                break  # stop immediately, no point continuing
+            skipped.append({"company": name, "reason": err})
 
-        time.sleep(0.3)  # avoid rate limiting
+        time.sleep(0.5)  # avoid rate limiting
 
     return {
         "batch_id": batch_id,
