@@ -12,7 +12,7 @@ import requests
 import pandas as pd
 
 # ---- CONFIGURE THESE ----
-SERVER_URL = "https://sync.audit-professionals.de/webhooks/pipedrive"   # e.g. https://automation.securance.de
+SERVER_URL = "https://sync.audit-professionals.de"
 TOKEN = "bpWebhookToken_sicher_random_abc123"
 # -------------------------
 
