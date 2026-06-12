@@ -12,8 +12,8 @@ import requests
 import pandas as pd
 
 # ---- CONFIGURE THESE ----
-SERVER_URL = "https://DEINE-DOMAIN"   # e.g. https://automation.securance.de
-TOKEN = "DEIN_BP_WEBHOOK_TOKEN"
+SERVER_URL = "https://sync.audit-professionals.de/webhooks/pipedrive"   # e.g. https://automation.securance.de
+TOKEN = "bpWebhookToken_sicher_random_abc123"
 # -------------------------
 
 def start_batch(excel_path: str) -> str:
