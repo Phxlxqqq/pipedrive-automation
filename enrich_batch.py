@@ -86,12 +86,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("excel", help="Path to Excel file")
     parser.add_argument("--results", help="Batch ID to fetch results for")
+    parser.add_argument("--list", action="store_true", help="List all batches")
     parser.add_argument("--output", help="Output Excel filename", default=None)
-    parser.add_argument("--limit", type=int, default=0, help="Max companies per batch (e.g. 50)")
+    parser.add_argument("--limit", type=int, default=0, help="Max companies per batch (e.g. 190)")
     parser.add_argument("--offset", type=int, default=0, help="Skip first N companies")
     args = parser.parse_args()
 
-    if args.results:
+    if args.list:
+        r = requests.get(f"{SERVER_URL}/admin/batch-list", params={"token": TOKEN}, timeout=10)
+        r.raise_for_status()
+        batches = r.json()
+        if not batches:
+            print("No batches found.")
+        for b in batches:
+            print(f"  {b['batch_id']}  {b['completed']}/{b['total']} completed  (started: {b['started_at']})")
+    elif args.results:
         poll_results(args.results, args.output)
     else:
         start_batch(args.excel, limit=args.limit, offset=args.offset)

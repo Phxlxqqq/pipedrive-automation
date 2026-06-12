@@ -33,10 +33,12 @@ def surfe_headers():
 
 def surfe_enrich_person(first_name: str = None, last_name: str = None,
                         company_domain: str = None, company_name: str = None,
-                        email: str = None, linkedin_url: str = None) -> dict:
+                        email: str = None, linkedin_url: str = None,
+                        include_mobile: bool = True) -> dict:
     """
     Start async Surfe person enrichment.
     Returns dict with enrichmentID for tracking.
+    Set include_mobile=False for batch mode to avoid consuming mobile credits.
     """
     person = {}
     if first_name:
@@ -55,7 +57,7 @@ def surfe_enrich_person(first_name: str = None, last_name: str = None,
     payload = {
         "include": {
             "email": True,
-            "mobile": True,
+            "mobile": include_mobile,
             "jobHistory": False,
             "linkedInUrl": True
         },
@@ -173,7 +175,8 @@ def start_batch_enrichment(batch_id: str, companies: list) -> dict:
                 last_name=best.get("lastName"),
                 linkedin_url=best.get("linkedInUrl"),
                 company_domain=domain,
-                company_name=name if not domain else None
+                company_name=name if not domain else None,
+                include_mobile=False  # batch mode: email only, no mobile credits
             )
             enrichment_id = result.get("enrichmentID")
             if enrichment_id:

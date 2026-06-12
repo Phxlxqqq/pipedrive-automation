@@ -514,6 +514,22 @@ async def admin_batch_enrich(req: Request):
     return {"batch_id": batch_id, "queued": len(companies), "status": "running"}
 
 
+@app.get("/admin/batch-list")
+def admin_batch_list(req: Request):
+    """List all batches with their progress."""
+    _check_test_token(req)
+    con = __import__("db").get_con()
+    rows = con.execute("""
+        SELECT batch_id, COUNT(*) as total,
+               SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
+               MIN(created_at), MAX(created_at)
+        FROM batch_enrichments GROUP BY batch_id ORDER BY MIN(created_at) DESC
+    """).fetchall()
+    con.close()
+    return [{"batch_id": r[0], "total": r[1], "completed": r[2],
+             "started_at": r[3], "last_update": r[4]} for r in rows]
+
+
 @app.get("/admin/batch-results/{batch_id}")
 def admin_batch_results(req: Request, batch_id: str):
     """Get current enrichment results for a batch. Poll until all are completed."""
